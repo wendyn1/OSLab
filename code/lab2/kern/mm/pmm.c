@@ -10,6 +10,7 @@
 #include <string.h>
 #include <riscv.h>
 #include <dtb.h>
+#include <slub.h>
 
 // virtual address of physical page array
 struct Page *pages;
@@ -119,6 +120,10 @@ void pmm_init(void) {
 
     // use pmm->check to verify the correctness of the alloc/free function in a pmm
     check_alloc_page();
+
+    // Lab2 Challenge (2410721): initialize and verify the SLUB object layer.
+    slub_init();
+    slub_check();
 
     extern char boot_page_table_sv39[];
     satp_virtual = (pte_t*)boot_page_table_sv39;

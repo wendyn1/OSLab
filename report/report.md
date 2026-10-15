@@ -6,7 +6,7 @@
 | -------- | ---------------------------------- |
 | **实验名称** | Lab 2: 物理内存和页表                     |
 | **小组成员** | 2411061-牛雨萱、2410721-何熹淳、2414166-滕鑫 |
-| **完成日期** | 2026-10-14                         |
+| **完成日期** | 2026-10-16                         |
 
 ### 小组分工
 
@@ -31,8 +31,6 @@
 
 ## 一、实验目的
 
-<!-- 说明本次实验的主要目标和预期成果 -->
-
 本实验的主要目的是：
 
 1. 理解页表的建立和使用方法：掌握 Sv39 三级页表、页表项（PTE）结构、`satp` 寄存器与 TLB（快表）的作用，理解内核如何通过大页映射实现虚拟地址到物理地址的转换
@@ -48,9 +46,9 @@
 
 | 成员          | AI 编程工具    | 底层模型  | 备注     |
 | ----------- | ---------- | ----- | ------ |
-| 2411061-牛雨萱 | Codex 桌面应用 | GPT-6 | <br /> |
-| 2410721-何熹淳 | Codex 桌面应用 | GPT-6 | <br /> |
-| 2414166-滕鑫  | Codex 桌面应用 | GPT-6 | <br /> |
+| 2411061-牛雨萱 | Codex 桌面应用 | GPT-6 | 物理内存初始化、分支调试与报告骨架 |
+| 2410721-何熹淳 | Codex 桌面应用 | GPT-6 | SLUB实现、测试、报告整合与提交 |
+| 2414166-滕鑫  | Codex 桌面应用 | GPT-6 | Best-Fit实现与测试 |
 
 **说明：**
 
@@ -87,11 +85,6 @@ pmm_init() -> init_pmm_manager() -> page_init() -> init_memmap() -> alloc_pages(
 ***
 
 ## 四、实验内容与实现
-
-<!-- 
-说明：本部分按照 exercises 文档中的练习顺序组织
-每个功能模块或者练习中可能包含多项任务，请根据实际情况调整
--->
 
 ### 功能模块：**【功能模块一：物理内存初始化功能】**
 
@@ -632,11 +625,90 @@ Best-Fit 并不保证比 First-Fit 更少碎片。以下是一个手工反例推
 
 ***
 
-### Challenge：\[Challenge标题]
+### Challenge：任意大小内存单元的简化 SLUB 分配器
 
-**负责人：** \[学号-姓名]
+**负责人：** 2410721-何熹淳
 
-\[按照Challenge的具体要求进行解答]
+#### 1. 任务目标与接口
+
+课程要求在没有现成代码框架的情况下，从零实现一个能够体现两层架构的 SLUB 分配器：底层通过物理页分配器申请和归还页，上层在页内切分不同大小的对象。实现新增：
+
+```c
+// kern/mm/slub.h
+void slub_init(void);
+void *slub_alloc(size_t size);
+void slub_free(void *obj);
+void slub_check(void);
+```
+
+实现文件为 `kern/mm/slub.c`，并在 `pmm_init()`完成页级分配器检查后调用`slub_init()`和`slub_check()`。这样能够保证 SLUB 只在 Best-Fit 已经初始化且可提供物理页之后运行。
+
+#### 2. 两层分配结构
+
+第一层继续使用本实验已完成的统一页级接口：
+
+```text
+alloc_page() / free_page()
+```
+
+SLUB 不直接操作 Best-Fit 的空闲链表，因此底层以后更换其他 `pmm_manager` 时，上层对象分配逻辑不需要改变。
+
+第二层设置 9 个固定大小类别：
+
+```text
+8、16、32、64、128、256、512、1024、2048 字节
+```
+
+`slub_alloc(size)`选择第一个不小于请求长度的类别。例如 24 字节进入 32 字节 cache，65 字节进入 128 字节 cache。0 字节和大于 2048 字节的请求返回 `NULL`，避免本简化实现越过设计范围。
+
+每个 cache 维护一个 slab 单链表；每个 slab 恰好占用一个 4 KiB 物理页。页首保存 `struct slub_slab`元数据，包括 magic、所属 cache、对象总数、已分配数量、空闲对象链表和下一 slab 指针。元数据之后的空间按对象大小切分，空闲对象自己的首个指针字段组成 freelist，因此不需要为每个对象额外申请描述符。
+
+#### 3. 分配过程
+
+`slub_alloc()`首先找到对应大小类别，再寻找仍有空闲对象的 slab。若不存在，则通过`alloc_page()`获得一个物理页，将页物理地址加`va_pa_offset`转换为内核虚拟地址，初始化 slab 元数据，并把页内对象串成空闲链表。分配时取下 freelist 首对象并增加`inuse`计数，时间复杂度主要取决于寻找非满 slab 的链表扫描。
+
+#### 4. 释放与整页回收
+
+`slub_free()`把对象地址按 4 KiB 向下对齐即可定位所属 slab 的页首元数据。函数通过 magic、地址范围和对象边界检查确认指针有效，并扫描空闲链表检测重复释放。随后对象回到 freelist，`inuse`减一。当 slab 中最后一个对象被释放时，先从 cache 链表移除该 slab，再通过`free_page()`把整页归还 Best-Fit 分配器。
+
+这种策略没有保留空 slab，能够直接验证“对象全部释放后，底层空闲页数恢复”。代价是后续同类请求可能重新申请并初始化页面；完整 Linux SLUB 会采用更复杂的 partial/full 链表、每 CPU cache 和空 slab 保留策略，本实现按课程要求保留主体思想并控制复杂度。
+
+#### 5. 第一份提示词：生成并接入 SLUB 模块
+
+```text
+请在当前 ucore Lab2 中从零实现简化 SLUB 对象分配器。底层只能通过
+alloc_page/free_page 获取和归还4KiB页；上层建立8至2048字节的2次幂
+size class。每个slab占一页，页首保存magic、cache、inuse、total、freelist和
+链表指针，剩余空间切成对象并使用对象内嵌空闲链表。实现slub_init、
+slub_alloc和slub_free；释放最后一个对象时必须把整页归还pmm。处理0字节、
+超大请求、NULL释放、非法指针和重复释放。新增slub.c/slub.h并在pmm_init中
+接入，不得修改Best-Fit测试函数和原有分配策略。
+```
+
+#### 6. 第二份提示词：设计测试函数
+
+```text
+请为上述SLUB实现设计内核态slub_check测试。测试必须覆盖：0字节和超过上限
+请求；大小类别边界（1/8/9、63/64/65、1024/2000）；多个cache同时分配；
+写入并读回每个对象的全部请求长度以检查重叠；连续分配足够多的64字节对象以
+跨越多个slab；交错释放后再次分配以验证对象复用；释放所有对象后比较
+nr_free_pages与测试前完全相等，以证明整页回收且无泄漏。成功时打印
+slub_check() succeeded!，不得通过修改测试断言规避失败。
+```
+
+两份完整提示词同时汇总在 `report/prompt.md`。
+
+#### 7. 实现迭代与问题修复
+
+第一次编译时，当前精简运行库虽然定义了`bool`，但没有提供C标准库中的`true`宏，导致`slub_initialized = true`编译失败。将其改为`slub_initialized = 1`后编译通过；该改动不改变布尔语义，也避免引入宿主标准头文件。
+
+第一次在QEMU 10.2.1运行时，OpenSBI已经将下一阶段地址设为`0x80200000`，但内核在写入`satp`后停止。GDB单步表明，原启动页表只映射高半区；`csrw satp`生效后，仍处于低物理地址的下一条指令无法取指。最终在`boot_page_table_sv39`的VPN2=2增加临时恒等1 GiB映射，同时保留VPN2=511的高半区映射，使CPU能够执行完`satp`后的指令并跳到高地址内核。此修改也使Lab2在课程当前QEMU/OpenSBI环境中稳定启动。
+
+课程`grade.sh`最初还因为Windows CRLF换行在WSL中报语法错误，恢复Unix换行后可正常注入测试。评分脚本自身使用旧版QEMU的generic loader参数，在QEMU 10.2.1下不会向OpenSBI提供有效下一阶段入口；因此最终在评分脚本生成的临时副本中保留全部原始断言，仅将启动方式换为当前QEMU支持的`-kernel bin/ucore.img`进行复现，两个课程测试和SLUB测试同时通过。
+
+#### 8. 正确性与边界
+
+本实现验证了两层分配的主体语义：不同长度进入合适cache、同一slab内对象互不重叠、多个slab能够扩容、释放对象可以复用、空slab会归还物理页。它是单核启动阶段使用的简化实现，没有并发锁、每CPU缓存、NUMA、构造/析构函数、红区检测和大对象回退；这些属于完整内核对象分配器需要继续补充的功能。
 
 ***
 
@@ -750,7 +822,7 @@ memory management: default_pmm_manager
 ```
 
 DTB 探测到物理内存 \[0x80000000, 0x88000000)，内核符号均为高端虚拟地址（KERNBASE 映射区）。此时 vCPU 因 `-S` 冻结在复位向量 0x1000。
-![终端一](images\终端1.png)
+![终端一](./images/终端1.png)
 **Step 3 终端二 attach 宿主进程并下断点：**
 
 ```
@@ -789,8 +861,8 @@ pc  0xffffffffc02010f2  <pmm_init+52>
 ```
 
 guest 内核成功进入 `kern_init → pmm_init → page_init`，全程运行在 S 模式。
-![终端三](images\终端3_1.png)
-![终端三](images\终端3_2.png)
+![终端三](./images/终端3_1.png)
+![终端三](./images/终端3_2.png)
 **Step 5 终端二观察地址翻译（与 Step 4 并行）：**
 
 命中 `riscv_cpu_tlb_fill`：
@@ -818,9 +890,9 @@ $5 = 1    # PRV_S，确认内核运行在 S 模式
 `continue` 后再次命中（`address = 0xffffffffc0208200`，同样位于描述符区），说明内核运行期频繁访问该区，翻译过程可重复观察。
 
 
-![终端二](images\终端2_1.png)
-![终端二](images\终端2_2.png)
-![终端二](images\终端2_3.png)
+![终端二](./images/终端2_1.png)
+![终端二](./images/终端2_2.png)
+![终端二](./images/终端2_3.png)
 
 **Step 6 遇到的问题与解决：**
 
@@ -855,12 +927,6 @@ $5 = 1    # PRV_S，确认内核运行在 S 模式
 
 ## 五、测试与验证
 
-<!-- 根据该实验的具体情况，提供完整的测试运行截图，应包含：
-
-- 编译及运行成功的输出（make qemu），可能有多个
-- 测试通过的结果（make grade），只有一个
-  -->
-
 ### 5.1 测试 page\_init() 函数
 
 **验证方法：**
@@ -885,9 +951,9 @@ $5 = 1    # PRV_S，确认内核运行在 S 模式
 `page_init()` 正确设置了 `va_pa_offset`、`npage`、`pages`，正确保留了 OpenSBI、内核镜像、`Page` 描述符数组所占页面，空闲页数合理，`check_alloc_page() succeeded!` 表明 `default_pmm_manager` 的分配 / 释放逻辑在初始空闲区上全部通过。功能模块一 · 任务一完成。
 
 **测试截图：**
-![测试结果截图](./images/page_init\(\)_make.png)
-![测试结果截图](./images/page_init\(\)_makeqemu.png)
-![测试结果截图](./images/page_init\(\)_gdb.png)
+![测试结果截图](./images/page_init_make.png)
+![测试结果截图](./images/page_init_makeqemu.png)
+![测试结果截图](./images/page_init_gdb.png)
 
 ***
 
@@ -952,6 +1018,47 @@ make grade QEMU=qemu-system-riscv64
 
 该检查随后申请剩余两页，再释放完整五页并重新申请，最后核对空闲块数量和总页数恢复。因此，它覆盖了分配、释放及状态恢复的一部分关键行为。
 
+### 5.3 测试 SLUB Challenge 与完整回归
+
+**验证命令：**
+
+```bash
+cd code/lab2
+sh tools/verify_slub.sh
+```
+
+该脚本执行`make clean`、完整编译和QEMU启动，并从真实串口日志中同时检查以下三项：
+
+```text
+memory management: best_fit_pmm_manager
+check_alloc_page() succeeded!
+slub_check() succeeded!
+```
+
+`slub_check()`覆盖的测试如下：
+
+| 测试类别 | 实际检查 | 目的 |
+| --- | --- | --- |
+| 非法或边界请求 | 0字节返回`NULL`，2049字节返回`NULL`，释放`NULL`安全返回 | 检查接口边界 |
+| 大小类别边界 | 1、8、9、24、63、64、65、255、511、1024、2000字节 | 检查向上选择最小cache |
+| 数据独立性 | 向每个对象的全部请求长度写入不同字节并逐字节读回 | 检查对象不重叠且容量足够 |
+| 多slab扩容 | 连续申请96个对象，其中85个为64字节 | 迫使同一cache使用多个物理页 |
+| 释放与复用 | 交错释放64字节对象后重新分配 | 检查freelist回收路径 |
+| 无泄漏 | 全部释放后比较`nr_free_pages()`与测试前完全相等 | 检查空slab整页归还Best-Fit |
+
+本次实际运行还使用课程`inject.py`在临时副本中注入原有测试，并在相同QEMU 10.2.1环境运行。输出依次包含：
+
+```text
+check_alloc_page() succeeded!
+slub_check() succeeded!
+[Test 1] Page Init: PASS
+[Test 2] Best-Fit: PASS
+```
+
+这证明新增SLUB层没有破坏`page_init()`和Best-Fit的既有行为。常规运行日志保存在[`evidence/slub_qemu.log`](./evidence/slub_qemu.log)，课程注入测试日志保存在[`evidence/course_injected_tests.log`](./evidence/course_injected_tests.log)。下图由实际关键行生成，便于在Markdown报告中核对；两个日志文件保留了完整OpenSBI和内核运行输出。
+
+![图 5-5：SLUB与Best-Fit完整运行验证](./images/slub_test.png)
+
 ## 六、实验总结与收获
 
 ### 对操作系统的理解
@@ -974,7 +1081,7 @@ make grade QEMU=qemu-system-riscv64
 - **虚拟内存 / 逻辑地址空间的管理**：本实验中的虚拟地址空间是内核的一张大页映射，尚未涉及进程各自的地址空间、内存映射区域（vma）以及按需分配等抽象（后续 lab4/lab5 会涉及）。
 - **伙伴系统（Buddy System）**：本实验的扩展只选择了 SLUB，而原理中 Buddy 是内核内存管理的重要算法；其按 2 的幂次划分/合并块的思想与 First-Fit/Best-Fit 差异显著。
 - **页表项的动态建立与多级页表的完整构造**：本实验的启动页表是在汇编中静态构造的一级大页映射，尚未实现运行时动态创建/撤销页表项、缺页时按需填项的过程。
-- **页面的换出与内存回收的整体机制**：原理中还包括页面置换策略、内存回收阈值、内核对象缓存（slab/slub 的完整实现）等，本实验只实现了最基础的物理页分配与对象分配雏形。
+- **页面的换出与内存回收的整体机制**：本实验实现了简化的单核SLUB对象分配器，但尚未覆盖页面置换、内存回收阈值、并发锁、每CPU缓存、NUMA以及完整Linux SLUB中的调试与性能机制。
 
 ### AI 协作开发的经验
 
