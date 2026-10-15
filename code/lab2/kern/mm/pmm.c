@@ -61,7 +61,48 @@ size_t nr_free_pages(void) {
     return pmm_manager->nr_free_pages();
 }
 
-//lab2 function1 YOUR CODE
+static void page_init(void){
+//lab2 function1 2411061
+    // detect physical memory space from the device tree
+    uint64_t memory_base = get_memory_base();
+    uint64_t memory_size = get_memory_size();
+    if (memory_base == 0 || memory_size == 0) {
+        panic("No physical memory detected by DTB.");
+    }
+
+    // kernel image is mapped at VA=KERNBASE and PA=KERNEL_BEGIN_PADDR,
+    // so the virtual-physical offset is their difference
+    va_pa_offset = KERNBASE - KERNEL_BEGIN_PADDR;
+
+    // npage is the upper bound of the manageable physical page numbers,
+    // i.e. the physical pages in [nbase, npage) are manageable
+    npage = (memory_base + memory_size) / PGSIZE;
+
+    // place the Page descriptor array right after the kernel image,
+    // aligned up to a page boundary (end is a virtual address)
+    extern char end[];
+    pages = (struct Page *)ROUNDUP((void *)end, PGSIZE);
+
+    // initially mark every manageable page descriptor as reserved
+    for (size_t i = 0; i < npage - nbase; i++) {
+        SetPageReserved(pages + i);
+    }
+
+    // free memory starts right after the descriptor array, aligned up
+    uintptr_t freemem = PADDR((uintptr_t)pages + (npage - nbase) * sizeof(struct Page));
+    freemem = ROUNDUP(freemem, PGSIZE);
+
+    // free memory ends at the physical memory end, aligned down
+    uintptr_t mem_end = ROUNDDOWN(memory_base + memory_size, PGSIZE);
+
+    // hand the complete free pages to the pmm_manager if there are any
+    if (freemem < mem_end) {
+        init_memmap(pa2page(freemem), (mem_end - freemem) / PGSIZE);
+    }
+
+    cprintf("physical memory map:\n");
+    cprintf("  memory: 0x%016lx, [0x%016lx, 0x%016lx].\n", memory_size, memory_base, memory_base + memory_size);
+}
 
 /* pmm_init - initialize the physical memory management */
 void pmm_init(void) {
