@@ -6,7 +6,7 @@
 | -------- | ---------------------------------- |
 | **实验名称** | Lab 2: 物理内存和页表                     |
 | **小组成员** | 2411061-牛雨萱、2410721-何熹淳、2414166-滕鑫 |
-| **完成日期** | 2026-10-16                         |
+| **完成日期** | 2026-10-20                         |
 
 ### 小组分工
 
@@ -16,7 +16,7 @@
 | ----------- | -------------------- |
 | 2411061-牛雨萱 | 功能模块一：物理内存初始化功能+分支任务 |
 | 2414166-滕鑫 | 功能模块二：物理内存分配功能       |
-| 2410721-何熹淳  | Challenge SLUB 分配算法  |
+| 2410721-何熹淳  | 任务三 Buddy System + Challenge SLUB |
 
 **实验报告分工：**
 
@@ -24,7 +24,7 @@
 | ----------- | ----------------------------- |
 | 2411061-牛雨萱 | 报告骨架 + 功能模块一章节 + 基础验证         |
 | 2414166-滕鑫 | 功能模块二章节 + 报告核心章节              |
-| 2410721-何熹淳  | Challenge 章节 + 报告整合 + 总结 + 提交 |
+| 2410721-何熹淳  | Buddy、Challenge 章节 + 报告整合 + 总结 + 提交 |
 
 
 
@@ -35,8 +35,8 @@
 
 1. 理解页表的建立和使用方法：掌握 Sv39 三级页表、页表项（PTE）结构、`satp` 寄存器与 TLB（快表）的作用，理解内核如何通过大页映射实现虚拟地址到物理地址的转换
 2. 理解物理内存的管理方法：掌握物理内存的探测（设备树 DTB）、以页为单位的 `Page` 描述符组织方式、空闲页链表的建立，以及虚拟地址/物理地址的转换（`PADDR`/`KADDR`、`va_pa_offset`）
-3. 理解页面分配算法：理解 First-Fit 连续分配的实现过程，动手实现 Best-Fit 分配器，并通过 SLUB 扩展任务了解页级分配之上的任意大小内存对象分配
-4. 学习使用 AI 辅助开发操作系统核心功能：通过设计提示词（prompt）借助 AI 生成并迭代 `page_init()`、Best-Fit、SLUB 等模块，体验"规格化需求 → AI 生成 → 测试迭代"的开发范式
+3. 理解页面分配算法：理解 First-Fit 连续分配，实现 Best-Fit 与 Buddy System，并通过 SLUB 扩展任务了解页级分配之上的任意大小内存对象分配
+4. 学习使用 AI 辅助开发操作系统核心功能：通过设计提示词（prompt）生成并迭代 `page_init()`、Best-Fit、Buddy System、SLUB 等模块，体验"规格化需求 → AI 生成 → 测试迭代"的开发范式
 
 ***
 
@@ -47,7 +47,7 @@
 | 成员          | AI 编程工具    | 底层模型  | 备注     |
 | ----------- | ---------- | ----- | ------ |
 | 2411061-牛雨萱 | Codex 桌面应用 | GPT-6 | 物理内存初始化、分支调试与报告骨架 |
-| 2410721-何熹淳 | Codex 桌面应用 | GPT-6 | SLUB实现、测试、报告整合与提交 |
+| 2410721-何熹淳 | Codex 桌面应用 | GPT-6 | Buddy、SLUB实现与测试，报告整合与提交 |
 | 2414166-滕鑫  | Codex 桌面应用 | GPT-6 | Best-Fit实现与测试 |
 
 **说明：**
@@ -80,7 +80,8 @@ pmm_init() -> init_pmm_manager() -> page_init() -> init_memmap() -> alloc_pages(
 1. 首先实现**功能模块一：物理内存探测与页描述符初始化（`page_init`）** → 为什么首先实现这个？因为任何内存分配都建立在"知道有多少物理内存、内存长什么样"的前提之上。内核通过设备树获得物理内存的基址与大小，计算 `va_pa_offset`、`npage`，把 `Page` 描述符数组放置在内核镜像之后，将 OpenSBI、内核镜像与描述符数组所占区域排除后，把剩余完整页面交给 `pmm_manager` 登记。这一步是所有后续分配功能的基石。
 2. 接着理解**功能模块二·任务一：First-Fit 连续分配算法** → 为什么先理解这个？因为 First-Fit 是最基础的连续物理内存分配方法，通过阅读 `default_pmm.c` 中 `default_init`、`default_init_memmap`、`default_alloc_pages`、`default_free_pages` 等函数，可以掌握"空闲页链表 + property 合并"这一完整分配/回收流程，为后续实现其他算法提供模板。
 3. 然后实现**功能模块二·任务二：Best-Fit 连续分配算法** → 为什么接着实现这个？在理解了 First-Fit 之后，设计提示词让 AI 在 `best_fit_pmm.c` 中实现完整的 Best-Fit 分配器，并在 `init_pmm_manager()` 中把物理内存管理器切换为 `best_fit_pmm_manager`。Best-Fit 在分配时选择满足需求的最小空闲块，改变剩余块的分布；它并不保证所有请求序列下的碎片都更少，需要结合任务二中的实例分析与 First-Fit 的差异。
-4. 最后补充**Challenge·任务四：SLUB 分配算法** → 为什么最后实现这个？SLUB 采用两层架构：第一层是基于页大小的分配（复用 `alloc_pages`/`free_pages`），第二层在页之上实现任意大小内存对象的分配。它建立在页级分配器之上，属于更上层的内存抽象；作为选做加分项，它让我们看到"页级分配 → 对象分配"的完整内存管理层次。
+4. 接着完成**功能模块二·任务三：Buddy System** → Buddy 仍属于页级分配器，但将空闲块限制为 2 的幂，分配时二分、释放时按伙伴地址递归合并。为保留课程测试所需的 Best-Fit 主路径，本实现把 64 页隔离区域交给 Buddy 自测，测试后完整归还 Best-Fit。
+5. 最后补充**Challenge·任务四：SLUB 分配算法** → SLUB 采用两层架构：第一层复用页分配，第二层在页内分配对象。它建立在页级分配器之上，让我们看到“页级分配 → 对象分配”的完整层次。
 
 ***
 
@@ -625,6 +626,80 @@ Best-Fit 并不保证比 First-Fit 更少碎片。以下是一个手工反例推
 
 ***
 
+### 功能模块二·任务三：Buddy System（伙伴系统）
+
+**负责人：** 2410721-何熹淳
+
+#### 1. 模块结构与接入方式
+
+本任务新增 `kern/mm/buddy_system.c` 和 `buddy_system.h`，实现标准 `struct pmm_manager` 接口并注册为 `buddy_system_pmm_manager`。每个 order 对应一条空闲链表，order k 中的块固定包含 $2^k$ 个连续物理页。
+
+当前主分配器继续保持为课程任务二要求的 Best-Fit。`buddy_system_self_check()`先从 Best-Fit 申请 64 页连续区域，在这块隔离区域内初始化并测试 Buddy，结束后清除页描述符状态，再把 64 页完整归还 Best-Fit。这样既实际接入并运行了 Buddy，又不会改变原有 Best-Fit、课程注入测试和 SLUB 的执行条件。
+
+#### 2. 分配、拆分与合并
+
+- **初始化：** 将任意长度的连续页区分解为满足相对地址对齐的最大 2 次幂块，分别挂入对应 order 链表。
+- **分配：** 把请求页数向上取整为最小 2 次幂；若目标 order 为空，则从更高 order 取块并逐级二分，右半块回收到低一级链表，左半块继续拆分或返回。
+- **释放：** 以块相对隔离区域的页号与块大小执行异或，得到伙伴页号。只有伙伴空闲且大小相同才合并，并继续尝试更高一级。
+- **状态：** 空闲块首页使用 `Page.property` 保存页数并设置 `PageProperty`；已分配块首页保存实际占用的 2 次幂页数，用于释放时校验。
+
+#### 3. 第一份提示词：生成并接入 Buddy System
+
+```text
+[PROMPT]
+直接在当前 ucore Lab2 工程中从零实现 Buddy System 物理页分配模块。
+新增 buddy_system.c 和 buddy_system.h，注册 buddy_system_pmm_manager，
+并在 pmm_init() 中接入隔离自测。
+
+[RELY]
+pmm.h 提供 pmm_manager 与页分配接口；memlayout.h 提供 Page/property；
+list.h 提供链表。当前主分配器为 Best-Fit，SLUB 依赖它。
+
+[GUARANTEE]
+不修改 First-Fit、Best-Fit、page_init、SLUB 和课程断言；不使用 libc
+动态内存；用 2410721 标记新增代码；自测结束后把隔离页完整归还。
+
+[SPECIFICATION]
+每个 order 管理 2^order 页块；初始化时按对齐拆分页区；分配请求向上
+取整并逐级二分；释放时用相对页号异或寻找同阶伙伴并递归合并；维护
+Page.property、PageProperty 和空闲页数，提供完整 pmm_manager 接口。
+```
+
+#### 4. 第二份提示词：设计 Buddy System 测试
+
+```text
+[PROMPT]
+为 Buddy System 编写内核态测试。失败必须 assert，成功打印
+buddy_system_check() succeeded!，并在 QEMU 启动时执行。
+
+[RELY]
+Buddy 将 n 页请求向上取整到最小 2 次幂；测试区域由 Best-Fit 提供；
+nr_free_pages 可检查分配和归还数量。
+
+[GUARANTEE]
+不删除或放宽断言，不修改 Best-Fit 与 SLUB；检查每次返回地址、实际块
+大小和空闲页数；测试后恢复所有 Page 状态并归还隔离区域。
+
+[SPECIFICATION]
+使用 64 页区域；测试 1、3、8 页请求和 3→4 页取整；测试超量请求；
+释放相邻 8 页块后申请 16 页验证递归合并；最终确认 Buddy 恢复 64 页，
+归还后 Best-Fit 的空闲页数也恢复。
+```
+
+#### 5. 测试覆盖及有效性
+
+| 测试行为 | 检查内容 | 有效性 |
+| --- | --- | --- |
+| 非 2 次幂请求 | 申请 3 页实际占用 4 页 | 验证向上取整规则 |
+| 多阶分配 | 依次申请 1、3、8 页并检查空闲页减少 13 | 验证拆分与计数 |
+| 容量边界 | 申请超过隔离区域的页数返回 `NULL` | 验证失败路径 |
+| 伙伴合并 | 相邻两个 8 页块释放后可从原低地址申请 16 页 | 验证伙伴计算和递归合并 |
+| 无泄漏 | Buddy 恢复 64 页，归还后 Best-Fit 页数恢复 | 验证跨管理器交接完整性 |
+
+完整提示词也已按课程指定四段格式收录在 `report/prompt.md`。
+
+***
+
 ### Challenge：任意大小内存单元的简化 SLUB 分配器
 
 **负责人：** 2410721-何熹淳
@@ -1018,7 +1093,7 @@ make grade QEMU=qemu-system-riscv64
 
 该检查随后申请剩余两页，再释放完整五页并重新申请，最后核对空闲块数量和总页数恢复。因此，它覆盖了分配、释放及状态恢复的一部分关键行为。
 
-### 5.3 测试 SLUB Challenge 与完整回归
+### 5.3 测试 Buddy、SLUB 与完整回归
 
 **验证命令：**
 
@@ -1027,13 +1102,16 @@ cd code/lab2
 sh tools/verify_slub.sh
 ```
 
-该脚本执行`make clean`、完整编译和QEMU启动，并从真实串口日志中同时检查以下三项：
+该脚本执行`make clean`、完整编译和QEMU启动，并从真实串口日志中同时检查以下四项：
 
 ```text
 memory management: best_fit_pmm_manager
 check_alloc_page() succeeded!
+buddy_system_check() succeeded!
 slub_check() succeeded!
 ```
+
+Buddy 测试在 64 页隔离区域内检查非 2 次幂取整、多阶拆分、超量失败、两个 8 页伙伴合并为 16 页，以及测试区域归还后 Best-Fit 空闲页数完全恢复。
 
 `slub_check()`覆盖的测试如下：
 
@@ -1050,14 +1128,15 @@ slub_check() succeeded!
 
 ```text
 check_alloc_page() succeeded!
+buddy_system_check() succeeded!
 slub_check() succeeded!
 [Test 1] Page Init: PASS
 [Test 2] Best-Fit: PASS
 ```
 
-这证明新增SLUB层没有破坏`page_init()`和Best-Fit的既有行为。常规运行日志保存在[`evidence/slub_qemu.log`](./evidence/slub_qemu.log)，课程注入测试日志保存在[`evidence/course_injected_tests.log`](./evidence/course_injected_tests.log)。下图由实际关键行生成，便于在Markdown报告中核对；两个日志文件保留了完整OpenSBI和内核运行输出。
+这证明新增 Buddy 与 SLUB 没有破坏`page_init()`和Best-Fit的既有行为。常规运行日志保存在[`evidence/slub_qemu.log`](./evidence/slub_qemu.log)，课程注入测试日志保存在[`evidence/course_injected_tests.log`](./evidence/course_injected_tests.log)。下图由实际关键行生成，便于在Markdown报告中核对；两个日志文件保留了完整OpenSBI和内核运行输出。
 
-![图 5-5：SLUB与Best-Fit完整运行验证](./images/slub_test.png)
+![图 5-5：Best-Fit、Buddy System与SLUB完整运行验证](./images/slub_test.png)
 
 ## 六、实验总结与收获
 
@@ -1069,6 +1148,7 @@ slub_check() succeeded!
 | ------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `struct Page` 页描述符数组                              | 物理页框（frame）管理                              | OS 原理把物理内存划分为固定大小的页框，由页描述符记录每个页框的状态；ucore 用一个连续的 `Page` 数组（由 `nbase`、`npage` 界定范围）为所有可管理物理页建立描述符，通过 `SetPageReserved` 等标志位标记状态，是原理中"页框管理"的代码落地                                                                                                         |
 | `pmm_manager` 框架与空闲页链表                            | 连续内存分配算法（First-Fit / Best-Fit / Worst-Fit） | 原理中的连续分配算法描述策略层面的"如何选择空闲块"；ucore 用 `struct pmm_manager` 统一抽象出 init / init\_memmap / alloc\_pages / free\_pages / nr\_free\_pages / check 等接口，再分别用 `default_pmm_manager`（First-Fit）和 `best_fit_pmm_manager`（Best-Fit）实现，通过空闲页链表上的 `property` 记录块大小并实现合并 |
+| Buddy System 的 order 链表、二分和异或合并 | 伙伴分配算法、内部碎片与快速合并 | 每个 order 管理 2 的幂页块；分配向上取整并拆分，释放用相对页号异或定位伙伴。它以内部碎片换取规则结构和快速合并，与 First/Best-Fit 的任意长度空闲块不同 |
 | `PADDR` / `KADDR`、`va_pa_offset`、`nbase`          | 逻辑地址与物理地址的转换、地址空间布局                        | 原理中地址转换由 MMU 完成；ucore 在软件侧维护"虚拟地址 = 物理地址 + 偏移"的关系（`va_pa_offset = KERNBASE - KERNEL_BEGIN_PADDR`），`PADDR`/`KADDR` 即内核镜像区虚实地址的双向换算，`pa2page` 则完成物理地址到描述符下标（物理页号）的换算                                                                                     |
 | 设备树（DTB）物理内存探测                                    | 系统启动时的内存配置发现                               | 原理中通常假定 OS 从固件/BIOS 获得内存信息；ucore 通过 `get_memory_base()` / `get_memory_size()` 从设备树读取物理内存基址与大小，使内核无需硬编码内存布局，运行时即可知道可管理的内存范围                                                                                                                             |
 | Sv39 三级页表、页表项（PTE）、1 GiB 大页                       | 页式内存管理、多级页表                                | 原理中页表项包含物理页号与标志位（有效位 V、读写执行权限 R/W/X、访问位 A、脏位 D 等）；ucore 的启动页表把 `[0xffffffffc0000000, 0xffffffffffffffff]` 用一个叶子大页映射到 `[0x80000000, 0xc0000000)`，并用 `satp` + `sfence.vma` 开启分页，体现了多级页表"按需建项、节省内存"的思想                                                    |
@@ -1079,7 +1159,6 @@ slub_check() succeeded!
 
 - **缺页异常与页面置换算法（swap）**：本实验只完成了物理内存的管理与页表映射，没有实现虚拟存储，也就没有"缺页 → 换入换出"的处理流程（后续 lab9 会涉及）。
 - **虚拟内存 / 逻辑地址空间的管理**：本实验中的虚拟地址空间是内核的一张大页映射，尚未涉及进程各自的地址空间、内存映射区域（vma）以及按需分配等抽象（后续 lab4/lab5 会涉及）。
-- **伙伴系统（Buddy System）**：本实验的扩展只选择了 SLUB，而原理中 Buddy 是内核内存管理的重要算法；其按 2 的幂次划分/合并块的思想与 First-Fit/Best-Fit 差异显著。
 - **页表项的动态建立与多级页表的完整构造**：本实验的启动页表是在汇编中静态构造的一级大页映射，尚未实现运行时动态创建/撤销页表项、缺页时按需填项的过程。
 - **页面的换出与内存回收的整体机制**：本实验实现了简化的单核SLUB对象分配器，但尚未覆盖页面置换、内存回收阈值、并发锁、每CPU缓存、NUMA以及完整Linux SLUB中的调试与性能机制。
 

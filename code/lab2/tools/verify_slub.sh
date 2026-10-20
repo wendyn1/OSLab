@@ -18,7 +18,8 @@ fi
 
 grep -F "memory management: best_fit_pmm_manager" validation/slub_qemu.log >/dev/null
 grep -F "check_alloc_page() succeeded!" validation/slub_qemu.log >/dev/null
+grep -F "buddy_system_check() succeeded!" validation/slub_qemu.log >/dev/null
 grep -F "slub_check() succeeded!" validation/slub_qemu.log >/dev/null
 
 cat validation/slub_qemu.log
-echo "PASS: Best-Fit and SLUB checks completed."
+echo "PASS: Best-Fit, Buddy System, and SLUB checks completed."

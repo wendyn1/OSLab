@@ -11,6 +11,7 @@
 #include <riscv.h>
 #include <dtb.h>
 #include <slub.h>
+#include <buddy_system.h>
 
 // virtual address of physical page array
 struct Page *pages;
@@ -120,6 +121,9 @@ void pmm_init(void) {
 
     // use pmm->check to verify the correctness of the alloc/free function in a pmm
     check_alloc_page();
+
+    // Lab2 task 3 (2410721): verify Buddy in an isolated page arena.
+    buddy_system_self_check();
 
     // Lab2 Challenge (2410721): initialize and verify the SLUB object layer.
     slub_init();
