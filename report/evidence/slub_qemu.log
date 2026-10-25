@@ -73,15 +73,16 @@ DTB init completed
 (THU.CST) os is loading ...
 Special kernel symbols:
   entry  0xffffffffc02000d6 (virtual)
-  etext  0xffffffffc0201bd4 (virtual)
-  edata  0xffffffffc0206018 (virtual)
-  end    0xffffffffc020610c (virtual)
-Kernel executable memory footprint: 25KB
+  etext  0xffffffffc020231e (virtual)
+  edata  0xffffffffc0207018 (virtual)
+  end    0xffffffffc0207274 (virtual)
+Kernel executable memory footprint: 29KB
 memory management: best_fit_pmm_manager
 physical memory map:
   memory: 0x0000000008000000, [0x0000000080000000, 0x0000000088000000].
 check_alloc_page() succeeded!
+buddy_system_check() succeeded!
 slub_check() succeeded!
-satp virtual address: 0xffffffffc0205000
-satp physical address: 0x0000000080205000
-qemu-system-riscv64: terminating on signal 15 from pid 608 (timeout)
+satp virtual address: 0xffffffffc0206000
+satp physical address: 0x0000000080206000
+qemu-system-riscv64: terminating on signal 15 from pid 601 (make)
