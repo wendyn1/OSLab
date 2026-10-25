@@ -6,49 +6,231 @@
 
 ```text
 [PROMPT]
-直接修改 kern/mm/pmm.c，实现 page_init()。根据设备树给出的物理内存
-基址和大小建立 Page 描述符数组，并将内核及描述符数组之后的完整空闲页
-注册给当前 pmm_manager。
+**任务**：修改文件 kern/mm/pmm.c，实现物理内存探测与 Page 描述符初始化功能，
+具体实现 page_init() 函数。该函数需要根据设备树提供的物理内存信息建立可管理
+物理页的描述符布局，并把排除 OpenSBI、内核镜像和描述符数组占用空间后的完整
+空闲页面交给当前 pmm_manager 管理。
+
+**操作要求**：你必须在项目中修改实际文件，而不是仅展示代码。保留文件中的现有
+代码，只在 page_init() 函数体内标有 lab2 和 YOUR CODE 的位置补全实现，不要删除
+既有逻辑。
+
+**输出要求**：直接进行文件操作。使用下面 [RELY]、[GUARANTEE]、[SPECIFICATION]
+部分提供的信息，以工程真实代码为准，不要引入无关功能。
 
 [RELY]
-- get_memory_base()/get_memory_size() 返回 DTB 内存信息。
-- end 是链接脚本提供的内核结束虚拟地址。
-- PADDR、ROUNDUP、ROUNDDOWN、PGSIZE、SetPageReserved、init_memmap 已提供。
+
+### 宏定义
+
+// 来自 kern/mm/mmu.h
+#define PGSIZE          4096
+#define PGSHIFT         12
+
+// 来自 libs/riscv.h
+#define DRAM_BASE       0x80000000
+
+// 来自 kern/mm/memlayout.h
+#define KERNBASE        0xFFFFFFFFC0200000
+
+// 来自 libs/defs.h
+#define ROUNDDOWN(a, n)
+#define ROUNDUP(a, n)
+
+// 来自 kern/mm/pmm.h
+#define PADDR(kva)  ({ uintptr_t __m_kva = (uintptr_t)(kva); \
+                       if (__m_kva < KERNBASE) panic(...); \
+                       __m_kva - va_pa_offset; })
+
+### 数据结构
+
+// 来自 kern/mm/memlayout.h
+struct Page {
+    int ref;                    // page frame's reference counter
+    uint64_t flags;             // array of flags that describe the status of the page frame
+    unsigned int property;      // the num of free block, used in first fit pm manager
+    list_entry_t page_link;     // free list link
+};
+
+### 页面状态宏
+
+// 来自 kern/mm/memlayout.h
+#define SetPageReserved(page)       ((page)->flags |= (1UL << PG_reserved))
+#define ClearPageReserved(page)     ((page)->flags &= ~(1UL << PG_reserved))
+#define PageReserved(page)          (((page)->flags >> PG_reserved) & 1)
+#define SetPageProperty(page)       ((page)->flags |= (1UL << PG_property))
+#define ClearPageProperty(page)     ((page)->flags &= ~(1UL << PG_property))
+#define PageProperty(page)          (((page)->flags >> PG_property) & 1)
+
+### 地址转换函数
+
+// 来自 kern/mm/pmm.h
+static inline struct Page *pa2page(uintptr_t pa) {
+    if (PPN(pa) >= npage) {
+        panic("pa2page called with invalid pa");
+    }
+    return &pages[PPN(pa) - nbase];
+}
+
+### 全局变量
+
+// 来自 kern/mm/pmm.c
+struct Page *pages;
+size_t npage = 0;
+uint64_t va_pa_offset;
+const size_t nbase = DRAM_BASE / PGSIZE;
+
+### 可用函数
+
+// 来自 kern/driver/dtb.c
+uint64_t get_memory_base(void);
+uint64_t get_memory_size(void);
+
+// 来自 libs/stdio.h
+int cprintf(const char *fmt, ...);
+
+// 来自 kern/debug（宏，自动带 __FILE__ / __LINE__）
+panic(fmt, ...)
+
+// 来自 kern/mm/pmm.c
+static void init_memmap(struct Page *base, size_t n);
+
+### 链接符号
+
+// 来自 tools/kernel.ld
+extern char end[];
 
 [GUARANTEE]
-- 只修改 page_init() 中标有 Lab2 的实现位置，保留其他成员学号。
-- 不修改 init_memmap、pa2page、测试函数和评分脚本。
-- DTB 信息无效时 panic；不存在完整空闲页时不调用 init_memmap。
+必须实现或修改的接口：
+```c
+static void page_init(void);
+
+
+你可以根据需要添加：
+- 辅助函数（建议设为 static）
+- 内部使用的宏定义
+- 模块内部的静态变量
 
 [SPECIFICATION]
-1. 计算 va_pa_offset、npage 和 pages。
-2. 把 [nbase,npage) 的 Page 描述符先标为 reserved。
-3. 排除 OpenSBI、内核镜像和 Page 数组占用空间。
-4. 所有边界按 PGSIZE 对齐，向 init_memmap 传入描述符和页数。
+
+## page_init
+
+**Pre-Condition**:
+- pmm_init() 已调用 init_pmm_manager()，pmm_manager 已指向有效的管理器
+- dtb_init() 已执行，get_memory_base() 和 get_memory_size() 返回 DTB 探测到的
+  物理内存起始和大小
+- 链接符号 end 指向内核代码结尾（虚拟地址）
+- 分页机制已开启，va_pa_offset 尚未设置
+
+**Post-Condition**:
+- va_pa_offset、npage、pages 已正确设置
+- [nbase, npage) 中所有描述符初始为 reserved 状态
+- 描述符数组之后、物理内存末尾之前的完整空闲页已通过 init_memmap() 注册
+- 已用 cprintf() 输出探测到的物理内存范围
+
+**Case 1（正常初始化）**:
+- 触发条件：memory_base != 0 && memory_size != 0 && npage > nbase
+- 执行行为：计算 va_pa_offset、npage；在 end 之后按页对齐放置 Page 描述符
+  数组，赋给 pages；给 [nbase, npage) 所有描述符 SetPageReserved；计算描述符
+  数组之后按页对齐的物理地址作为空闲区起点 freemem；计算物理内存末尾按页向下
+  对齐作为空闲区终点；若 freemem < mem_end，调用 init_memmap(pa2page(freemem),
+  (mem_end - freemem) / PGSIZE)
+- 最终状态：全局变量正确设置，空闲页注册完成，cprintf 输出物理内存范围
+
+**Case 2（DTB 信息无效）**:
+- 触发条件：memory_base == 0 || memory_size == 0
+- 执行行为：调用 panic() 终止初始化
+- 最终状态：内核 panic，不继续执行
+
+**Case 3（无可用完整页面）**:
+- 触发条件：freemem >= mem_end
+- 执行行为：不调用 init_memmap()，直接返回
+- 最终状态：va_pa_offset、npage、pages 仍正确设置，但空闲页数为 0
+
+**Requirements**:
+- 必须严格区分虚拟地址、物理地址、物理页号和 Page 描述符地址，不能混用
+- end 是虚拟地址，要用 PADDR() 转成物理地址后再参与空闲区计算
+- 描述符数组起点、空闲区起点、空闲区终点都必须按 PGSIZE 对齐
+- 必须确保 [0x80000000, KernelEnd) 和描述符数组本身不进入空闲区
+- 必须先给所有描述符 SetPageReserved，再对空闲区调用 init_memmap()
+- 禁止修改 init_memmap()、default_init_memmap()、pa2page() 等已有函数
+
 ```
 
 ## 2. 功能模块二：实现并接入 Best-Fit
 
 ```text
 [PROMPT]
-直接修改 kern/mm/best_fit_pmm.c 和 kern/mm/pmm.c，参考现有 First-Fit，
-实现完整 Best-Fit 物理页管理器并注册到 pmm_manager。
+
+请在 C:\Users\xin20\Desktop\OSLab-lab2 项目中，
+完成功能模块二任务二：Best-Fit 连续物理内存分配算法。
+
+请直接修改实际代码，不要只展示示例。
+
+主要修改文件：
+1. code/lab2/kern/mm/best_fit_pmm.c
+2. code/lab2/kern/mm/pmm.c
+
+如确有必要，可以补充 best_fit_pmm.h 中的管理器声明。
+不要修改其他功能模块。
 
 [RELY]
-- pmm.h 提供 struct pmm_manager 接口。
-- memlayout.h 提供 Page、property 和页面标志。
-- list.h 提供双向链表操作；basic_check() 与 best_fit_check() 已提供。
+
+请先阅读以下实际文件，以项目代码为准：
+- kern/mm/default_pmm.c
+- kern/mm/best_fit_pmm.c
+- kern/mm/best_fit_pmm.h
+- kern/mm/pmm.h
+- kern/mm/memlayout.h
+- libs/list.h
+
+项目已提供：
+- struct Page 和 free_area_t。
+- struct pmm_manager 接口。
+- 页面状态宏、引用计数接口和双向链表操作。
+- 完整的 First-Fit 实现。
+- basic_check() 和 best_fit_check() 两个测试函数。
+
+当前 best_fit_pmm.c 只有空闲区状态定义和测试函数。
+当前 pmm.c 使用 default_pmm_manager。
 
 [GUARANTEE]
-- 不修改 basic_check()、best_fit_check()、page_init() 和测试断言。
-- 空闲链表保持地址递增，相同大小候选选择低地址块。
-- 保留 Lab2 注释并将本任务 YOUR CODE 替换为 2414166。
+
+1. 不修改 basic_check() 和 best_fit_check()。
+2. 不修改 default_pmm.c、page_init()、评分脚本或测试断言。
+3. 不删除既有测试来绕过错误。
+4. Best-Fit 的内部状态必须与测试使用的 free_list、
+   nr_free 保持一致。
+5. 保留 lab2 注释标记，将本次 Best-Fit 实现位置的
+   YOUR CODE 替换为我的学号 2414166。
+   不修改其他作者的学号。
+6. 不实现 Buddy 或 SLUB，不修改实验报告。
+7. 如未实际执行测试，明确说明，不能声称测试通过。
 
 [SPECIFICATION]
-1. 实现初始化、空闲区注册、分配、释放、计数及管理器注册。
-2. 分配时选择能容纳请求的最小空闲块，必要时拆分。
-3. 释放时按地址插回并与前后连续空闲块合并。
-4. 在 init_pmm_manager() 中启用 best_fit_pmm_manager。
+
+采用按地址递增排列的空闲块链表。
+
+实现以下功能：
+1. 初始化：初始化空闲链表，空闲页数置零。
+2. 注册空闲区：初始化页面状态，设置空闲块首页的
+   property 和标志，按地址插入，更新空闲页数。
+3. 分配：
+   - 从所有满足请求的空闲块中选择最小块。
+   - 大小相同时选择地址较低的块。
+   - 找到完全匹配块时可以提前结束搜索。
+   - 无满足要求的连续块时返回 NULL。
+   - 必要时拆分，并维护剩余块、状态和页数。
+4. 释放：
+   - 恢复页面状态，按地址插回链表。
+   - 合并前后物理连续的空闲块。
+   - 正确维护 property、标志和空闲页数。
+5. 实现空闲页数量查询。
+6. 定义完整的 best_fit_pmm_manager，
+   将检查入口绑定到已有 best_fit_check()。
+7. 在 pmm.c 的 init_pmm_manager() 中，
+   将当前物理内存管理器切换为 best_fit_pmm_manager。
+
+完成后说明修改位置，并提供编译和运行验证命令。
 ```
 
 ## 3. 分支任务：观察 QEMU 中的 Sv39 地址翻译

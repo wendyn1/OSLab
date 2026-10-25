@@ -110,7 +110,7 @@ static void page_init(void);
 2. DTB 信息无效：memory\_base == 0 或 memory\_size == 0，调用 panic() 终止初始化。
 3. 无可用完整页面：描述符数组之后到物理内存末尾不足一页，不调用 init\_memmap()，直接返回。
 
-- 与其他模块的交互关系]
+- 与其他模块的交互关系
   上游：kern/driver/dtb.c 提供 get\_memory\_base() / get\_memory\_size()；tools/kernel.ld 提供链接符号 end。
   同层：kern/mm/memlayout.h 提供 struct Page、PG\_reserved / PG\_property 及页面状态宏；kern/mm/pmm.h 提供 PADDR、npage、nbase、pages、va\_pa\_offset。
   下游：通过 init\_memmap() 把空闲区注册给 pmm\_manager；pmm\_init() 随后调用 check\_alloc\_page() 验证。
@@ -722,8 +722,6 @@ nr_free_pages 可检查分配和归还数量。
 | 伙伴合并 | 相邻两个 8 页块释放后可从原低地址申请 16 页 | 验证伙伴计算和递归合并 |
 | 无泄漏 | Buddy 恢复 64 页，归还后 Best-Fit 页数恢复 | 验证跨管理器交接完整性 |
 
-完整提示词也已按课程指定四段格式收录在 `report/prompt.md`。
-
 ***
 
 ### Challenge：任意大小内存单元的简化 SLUB 分配器
@@ -796,8 +794,6 @@ slub_alloc和slub_free；释放最后一个对象时必须把整页归还pmm。�
 nr_free_pages与测试前完全相等，以证明整页回收且无泄漏。成功时打印
 slub_check() succeeded!，不得通过修改测试断言规避失败。
 ```
-
-两份完整提示词同时汇总在 `report/prompt.md`。
 
 #### 7. 实现迭代与问题修复
 
