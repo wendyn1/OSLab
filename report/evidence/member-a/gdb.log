@@ -1,0 +1,31 @@
+The target architecture is set to "riscv:rv64".
+Breakpoint 1 at 0xffffffffc0200140: file kern/init/member_a_probe.S, line 48.
+Breakpoint 2 at 0xffffffffc0200142: file kern/init/member_a_probe.S, line 51.
+Breakpoint 3 at 0xffffffffc0200144: file kern/init/member_a_probe.S, line 56.
+Breakpoint 4 at 0xffffffffc0200148: file kern/init/member_a_probe.S, line 59.
+Breakpoint 5 at 0xffffffffc0200bf4: file kern/trap/trap.c, line 107.
+Breakpoint 6 at 0xffffffffc0200cba: file kern/trap/trapentry.S, line 116.
+Breakpoint 7 at 0xffffffffc0201de0: file libs/sbi.c, line 17.
+0x0000000000001000 in ?? ()
+BEFORE length=2 pc=0xffffffffc0200140 sp=0xffffffffc0204f80 status=0x8000000000006000
+TRAP ABI PASS: a0=0xffffffffc0204e60 frame_size=288
+RESTORE PASS: sp=0xffffffffc0204f80 sepc=0xffffffffc0200142 status=0x8000000000006100
+POST_SRET status=0x8000000000006000 (SPP=0 SPIE=0)
+AFTER PASS: all 32 GPR slots, sp, PC, SIE; count=1 status=0x8000000000006000
+BEFORE length=4 pc=0xffffffffc0200144 sp=0xffffffffc0204f80 status=0x8000000000006000
+TRAP ABI PASS: a0=0xffffffffc0204e60 frame_size=288
+RESTORE PASS: sp=0xffffffffc0204f80 sepc=0xffffffffc0200148 status=0x8000000000006100
+POST_SRET status=0x8000000000006000 (SPP=0 SPIE=0)
+AFTER PASS: all 32 GPR slots, sp, PC, SIE; count=2 status=0x8000000000006000
+BEFORE length=2 pc=0xffffffffc0200140 sp=0xffffffffc0204f80 status=0x8000000000006002
+TRAP ABI PASS: a0=0xffffffffc0204e60 frame_size=288
+RESTORE PASS: sp=0xffffffffc0204f80 sepc=0xffffffffc0200142 status=0x8000000000006120
+POST_SRET status=0x8000000000006002 (SPP=0 SPIE=0)
+AFTER PASS: all 32 GPR slots, sp, PC, SIE; count=3 status=0x8000000000006002
+BEFORE length=4 pc=0xffffffffc0200144 sp=0xffffffffc0204f80 status=0x8000000000006002
+TRAP ABI PASS: a0=0xffffffffc0204e60 frame_size=288
+RESTORE PASS: sp=0xffffffffc0204f80 sepc=0xffffffffc0200148 status=0x8000000000006120
+POST_SRET status=0x8000000000006002 (SPP=0 SPIE=0)
+AFTER PASS: all 32 GPR slots, sp, PC, SIE; count=4 status=0x8000000000006002
+MEMBER_A_GDB_PASS: 4 lifecycles, 16/32-bit breakpoints, SIE=0/1
+[Inferior 1 (process 1) detached]

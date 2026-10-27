@@ -1,24 +1,117 @@
 # Lab3 提示词汇总
 
-## 中断与时钟模块（2410721-何熹淳）
+## 需求规格（Spec）
+
+### 已有条件
+
+1. 当前为 RV64，REGBYTES=8，LOAD/STORE 展开为 ld/sd。
+2. SAVE_ALL 已提供且保持不变，在当前内核栈分配 36×8=288 字节。
+3. trapframe 的前 32 个槽位对应 x0～x31，后四个依次是 status、epc、badvaddr、cause。
+4. 第 2 号槽位保存分配现场之前的 sp，而当前 sp 指向整个现场起始地址。
+5. void trap(struct trapframe *tf) 遵循 RISC-V ABI；处理函数可以修改 tf->epc，以确定返回位置。
+6. 当前测试与实现范围是框架提供的内核态 Trap 路径，不增加用户栈切换或浮点现场保存。
+
+### RESTORE_ALL
+
+输入：sp 指向有效、与 SAVE_ALL 一致的 Trap frame。输出：恢复返回所需的 CSR 与通用寄存器，sp 回到保存值，为紧随其后的 sret 做好准备。
+
+- 从偏移 256、264 读取 status、epc，分别写入 sstatus、sepc。
+- 用 t0、t1 暂存 CSR 内容，之后从现场恢复它们原来的值。
+- 恢复 x1、x3～x31；x0 恒为零，不写回；最后从偏移 16 恢复 x2/sp。
+- 不自行修改 epc、不强制改变 SPP、不把诊断用 cause/badvaddr 机械写回。
+- 不将当前 sp 再加 288 代替读取保存槽位；保持恢复接口与实际保存状态一致。
+
+### __alltraps
+
+- 保留已有 SAVE_ALL 调用。
+- 执行 mv a0, sp，将当前 Trap frame 地址作为第一个 C 参数。
+- 执行 call trap，允许汇编器与链接器进行正常的调用展开和松弛。
+- C 函数返回后顺序进入 __trapret，由 RESTORE_ALL 和 sret 返回。
+- 不增加无关栈帧。原 sp 满足 16 字节对齐时，减去 288 后仍满足 ABI 对齐。
+
+### 修改边界
+
+正式源码只修改 kern/trap/trapentry.S 的两个待填位置。保留 SAVE_ALL、trap.h、trap.c、测试与评分脚本。将对应 YOUR CODE 替换为 2414166。
+
+### 验收
+
+1. 汇编目标编译成功，反汇编显示偏移和恢复顺序正确。
+2. 临时副本中，16 位、32 位断点分别在 SIE=0、SIE=1 条件下各执行一次。
+3. GDB 在触发前保存全部 32 个 GPR 槽位值，在 trap C 入口检查现场、参数、288 字节差值和对齐。
+4. 在 sret 前验证所有可写 GPR 恢复、x0 仍为零、sepc 和 sstatus 正确；在返回地址再次验证 GPR、PC 和 SIE。
+5. 正式模块二保持空缺；隔离测试不宣称完整 Lab3 评分通过。
+
+## Prompt 整理
+
+```text
+[PROMPT]
+在当前 Lab3 框架中完成成员 A 的模块一，只实现
+kern/trap/trapentry.S 中 RESTORE_ALL 和 __alltraps 的待填部分。
+
+[RELY]
+SAVE_ALL、struct trapframe、REGBYTES、LOAD/STORE 和 trap() 接口已提供。
+RV64 上现场为 36 个 8 字节槽位；x2 槽位保存 Trap 前的 sp。
+CSR 槽位依次是 sstatus、sepc、异常附加信息和 scause。
+
+[GUARANTEE]
+不修改 SAVE_ALL、结构体、trap() 签名及模块二或评分脚本。
+保留任务注释并将 YOUR CODE 替换为 2414166。
+使用临时寄存器恢复 CSR 后，恢复这些临时寄存器自身的保存值。
+最后恢复 sp，不自行递增 epc，不强制切换到用户态。
+
+[SPECIFICATION]
+1. 从现有布局恢复 sstatus、sepc 以及 x1、x3～x31，最后恢复 x2。
+2. SAVE_ALL 后通过 a0 传入当前现场地址，正常调用 trap()。
+3. 返回后进入 __trapret，完成恢复并执行 sret。
+4. 核对现场布局、栈对齐、CSR 和调用约定，并提供实现说明。
+```
+
+## 验证与迭代记录
+
+验证脚本采用独立临时副本，加入明确标记的异常处理替身，按实际编码跳过 2/4 字节断点。测试汇编先保存调用者的 callee-saved 寄存器和 ra，测试结束后恢复，避免测试函数自身违反 ABI。
+
+真实迭代发生在验证工具：GDB 中 sp 位运算需要显式整数转换；直接入口断点未可靠命中，因此改为在 trap 精确入口检查 SAVE_ALL 后的状态；QEMU 4.1.1 的 SPIE 返回行为与指导书不同，核对官方源码后按版本记录。详见 [调试记录](evidence/member-a/debug-record.md)。
+
+
+## 2. 2414166-滕鑫-模块一：独立验证设计
+
+以下为本轮实际测试设计的可复用需求整理，与代码实现提示词分开记录。
+
+```text
+[PROMPT]
+为模块一建立可复现的隔离验证，不修改正式模块二或课程评分脚本。
+
+[RELY]
+模块一已实现，模块二仍为占位；WSL 中提供 GCC、GDB、QEMU。
+
+[GUARANTEE]
+仅在临时副本添加最小断点处理替身；探针自身遵守 ABI。
+记录全部真实输出、失败与修复；不把替身当作完整实验答案。
+
+[SPECIFICATION]
+对 16/32 位断点与 SIE=0/1 的四个组合，比较进入前的 GPR、
+SAVE_ALL 后的现场及 C 参数、sret 前 CSR、返回后的 GPR/PC/SIE。
+保存构建、反汇编、GDB、运行日志；记录模拟器版本差异。
+```
+
+实现脚本：[verify_member_a.py](../code/lab3/tools/verify_member_a.py)。
+
+## 3. 2410721-何熹淳：中断和时钟处理
 
 ```text
 [PROMPT]
 修改 kern/trap/trap.c，补全 interrupt_handler(struct trapframe *tf)。
-需要处理软件中断、时钟中断、外部中断以及未知中断。Supervisor Timer
-分支要形成持续时钟：设置下一次事件、增加 ticks、每 100 次输出一次，
-输出十次后通过 SBI 关机。只修改本任务相关代码，保留原有接口和输出风格。
+处理软件中断、时钟中断、外部中断和未知中断。Supervisor Timer 分支
+必须形成持续时钟：设置下一次事件、增加 ticks、每 100 次输出一次，
+输出十次后通过 SBI 关机。保留已有接口和输出风格，不用循环模拟计数。
 
 [RELY]
-- tf->cause：scause 的保存值，最高位是中断标志，低位是 cause code
+- tf->cause：scause 保存值，最高位是中断标志，低位是 cause code
 - __riscv_xlen：当前 RISC-V 位数
-- IRQ_U_SOFT、IRQ_S_SOFT、IRQ_H_SOFT、IRQ_M_SOFT
-- IRQ_U_TIMER、IRQ_S_TIMER、IRQ_H_TIMER、IRQ_M_TIMER
-- IRQ_U_EXT、IRQ_S_EXT、IRQ_H_EXT、IRQ_M_EXT
+- IRQ_U/S/H/M_SOFT、IRQ_U/S/H/M_TIMER、IRQ_U/S/H/M_EXT
 - clock_set_next_event()：设置下一次 SBI 定时事件
 - volatile size_t ticks：累计时钟中断次数
-- TICK_NUM：100
-- print_ticks()：输出一次计数结果
+- TICK_NUM：100；print_ticks()：输出一次计数结果
 - sbi_shutdown()：请求 OpenSBI 关闭 QEMU
 - print_trapframe(tf)：输出未知 Trap 的现场
 
@@ -27,13 +120,13 @@ void interrupt_handler(struct trapframe *tf);
 
 [SPECIFICATION]
 Pre-Condition:
-- tf 非空，tf->cause 保存了本次中断的 scause
-- 时钟和 Supervisor 中断已经在初始化阶段开启
+- tf 非空，tf->cause 保存本次中断的 scause
+- 时钟和 Supervisor 中断已在初始化阶段开启
 
 Post-Condition:
 - 已知中断进入对应分支，不破坏 trapframe
 - Supervisor Timer 已安排下一次事件并使 ticks 恰好增加 1
-- 未知中断给出编号和现场信息
+- 未知中断输出低位编号和现场信息
 
 Case 1（Supervisor Timer）:
 - 清除 scause 最高位后编号为 IRQ_S_TIMER
@@ -42,8 +135,8 @@ Case 1（Supervisor Timer）:
 - 独立记录输出次数，达到 10 次时输出结束信息并调用 sbi_shutdown()
 
 Case 2（其他已知中断）:
-- 按 U/S/H/M 和 software/timer/external 分类
-- 输出清楚的中断类型，不修改 epc
+- 按 U/S/H/M 和 software/timer/external 分类并输出类型
+- 不修改 epc，中断返回后继续被打断位置
 
 Case 3（未知中断）:
 - 输出 Unknown interrupt: cause <低位编号>
@@ -52,75 +145,29 @@ Case 3（未知中断）:
 Requirements:
 - 中断号必须先清除与 __riscv_xlen 对应的最高位
 - SBI 定时器是一次性事件，每次 Supervisor Timer 中断都必须重设
-- 不把 epc 前移，中断返回后应继续执行被打断位置
-- 不用循环模拟 ticks，计数必须来自真实中断
+- 计数必须来自真实中断，不能用循环直接修改 ticks
 ```
 
-## Trap 入口与恢复模块
+### 测试提示词
 
 ```text
 [PROMPT]
-补全 kern/trap/trapentry.S 的 __alltraps 和 RESTORE_ALL，使入口保存的
-寄存器布局与 struct trapframe 完全一致。把 trapframe 指针放入 a0 调用
-trap，返回后恢复 CSR 和通用寄存器，最后执行 sret。
+运行课程 make grade 测试 Lab3，中断部分必须覆盖 Supervisor software
+interrupt、未知编号 15、持续时钟到 200 ticks，以及多次 Trap 返回。
 
 [RELY]
-- SAVE_ALL 宏及 struct trapframe 字段顺序
-- sstatus、sepc、stval、scause CSR
-- trap(struct trapframe *tf)
+- Makefile 的 grade 目标和 tools/grade.sh
+- QEMU/OpenSBI 实际运行结果
 
 [GUARANTEE]
-__alltraps
-RESTORE_ALL
+- 不修改评分断言制造通过结果
+- 保存测试输出到 report/evidence/lab3_grade.log
 
 [SPECIFICATION]
-- 必须完整恢复被中断前的通用寄存器和 sepc/sstatus
-- sp 最后恢复，恢复过程中始终以当前 trapframe 为基址
-- a0 传入当前 sp，C 函数返回后仍从该 trapframe 恢复
+- 持续时钟项应得到 PASS（40/40）
+- 完整三项测试总分应为 100/100
 ```
 
-## 异常处理模块
+## 4. 成员 C：异常处理与集成（待补充）
 
-```text
-[PROMPT]
-补全 exception_handler(struct trapframe *tf)，处理非法指令和断点异常。
-根据 epc 所指指令低两位判断指令是 16 位还是 32 位，更新 epc 后返回；
-其他异常打印完整 trapframe。
-
-[RELY]
-- CAUSE_ILLEGAL_INSTRUCTION、CAUSE_BREAKPOINT
-- tf->epc、tf->cause
-- RISC-V 指令低两位编码规则
-- print_trapframe(tf)
-
-[GUARANTEE]
-void exception_handler(struct trapframe *tf);
-
-[SPECIFICATION]
-- 指令低两位为 0b11 时 epc += 4，否则 epc += 2
-- 已处理异常返回后不能再次执行同一条异常指令
-- 未知异常保留并输出现场信息
-```
-
-## 测试提示词
-
-```text
-[PROMPT]
-使用课程提供的 make grade 测试 Lab3，不通过时根据第一处失败定位问题。
-测试必须覆盖：Trap 入口和寄存器恢复、断点返回、非法指令 2/4 字节长度、
-Supervisor software interrupt、未知编号 15、持续时钟到 200 ticks。
-
-[RELY]
-- 项目 Makefile 的 grade 目标
-- tools/grade.sh 与课程注入测试
-- QEMU/OpenSBI 实际运行输出
-
-[GUARANTEE]
-- 保存完整测试输出
-- 不修改评分断言来制造通过结果
-
-[SPECIFICATION]
-- 三项测试必须分别得到 35/35、25/25、40/40
-- 总分必须为 100/100
-- 测试日志保存至 report/evidence/lab3_grade.log
-```
+请成员 C 补充真实实现和验证提示词。测试替身不等价于成员 C 的实现。

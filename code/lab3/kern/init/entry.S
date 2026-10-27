@@ -61,11 +61,13 @@ bootstacktop:
     .global boot_page_table_sv39
 # 分配 4KiB 内存给预设的三级页表
 boot_page_table_sv39:
-    # Keep a temporary identity mapping while satp takes effect.
+    # 0xffffffff_c0000000 map to 0x80000000 (1G)
+    # Lab2 startup fix (2410721): identity map while enabling satp.
+    # VPN2=2: physical [0x80000000, 0xc0000000).
     .zero 8 * 2
-    .quad (0x80000 << 10) | 0xcf # VPN2=2, physical identity mapping
+    .quad (0x80000 << 10) | 0xcf # VRWXAD
     .zero 8 * 508
-    # Map the high-half kernel range to physical 0x80000000.
+    # 设置最后一个页表项，PPN=0x80000，标志位 VRWXAD 均为 1
     .quad (0x80000 << 10) | 0xcf # VRWXAD
 
     .global boot_hartid

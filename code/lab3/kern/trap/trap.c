@@ -143,7 +143,7 @@ void interrupt_handler(struct trapframe *tf) {
     }
 }
 
-// lab3 function2 2414166
+// lab3 function2 2411061
 void exception_handler(struct trapframe *tf) {
     switch (tf->cause) {
     case CAUSE_ILLEGAL_INSTRUCTION:

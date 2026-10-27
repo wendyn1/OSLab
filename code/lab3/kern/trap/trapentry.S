@@ -44,7 +44,6 @@
     csrrw s0, sscratch, x0
     csrr s1, sstatus
     csrr s2, sepc
-    # stval is the current architectural name of the old sbadaddr CSR.
     csrr s3, stval
     csrr s4, scause
 
@@ -57,12 +56,14 @@
 
     .macro RESTORE_ALL
 
-    # lab3 function1 2411061
-    LOAD s1, 32*REGBYTES(sp)
-    LOAD s2, 33*REGBYTES(sp)
-    csrw sstatus, s1
-    csrw sepc, s2
+    #lab3 function1 2414166
+    # Restore return CSRs before restoring the temporary registers used here.
+    LOAD t0, 32*REGBYTES(sp)
+    LOAD t1, 33*REGBYTES(sp)
+    csrw sstatus, t0
+    csrw sepc, t1
 
+    # x0 is hard-wired zero. Keep sp as the frame base until the last load.
     LOAD x1, 1*REGBYTES(sp)
     LOAD x3, 3*REGBYTES(sp)
     LOAD x4, 4*REGBYTES(sp)
@@ -102,9 +103,10 @@
 __alltraps:
     SAVE_ALL
 
-    # lab3 function1 2411061
-    move a0, sp
-    jal trap
+    #lab3 function1 2414166
+    # a0 is the first C argument: the trapframe starts at the current sp.
+    mv a0, sp
+    call trap
     # sp should be the same as before "jal trap"
 
     .globl __trapret

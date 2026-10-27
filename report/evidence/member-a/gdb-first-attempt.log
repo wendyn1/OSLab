@@ -1,0 +1,14 @@
+The target architecture is set to "riscv:rv64".
+Breakpoint 1 at 0xffffffffc0200140: file kern/init/member_a_probe.S, line 48.
+Breakpoint 2 at 0xffffffffc0200142: file kern/init/member_a_probe.S, line 51.
+Breakpoint 3 at 0xffffffffc0200144: file kern/init/member_a_probe.S, line 56.
+Breakpoint 4 at 0xffffffffc0200148: file kern/init/member_a_probe.S, line 59.
+Breakpoint 5 at 0xffffffffc0200c08: file kern/trap/trapentry.S, line 104.
+Breakpoint 6 at 0xffffffffc0200bf4: file kern/trap/trap.c, line 107.
+Breakpoint 7 at 0xffffffffc0200cba: file kern/trap/trapentry.S, line 116.
+Breakpoint 8 at 0xffffffffc0201de0: file libs/sbi.c, line 17.
+0x0000000000001000 in ?? ()
+BEFORE length=2 pc=0xffffffffc0200140 sp=0xffffffffc0204f80 status=0x8000000000006000
+/mnt/c/Users/xin20/Documents/Codex/2026-10-27/http-oslab-mobisys-top-lab2026-book/member_a_delivery/validation/verify.gdb:714: Error in sourced command file:
+Argument to arithmetic operation not a number or boolean.
+[Inferior 1 (process 1) detached]
