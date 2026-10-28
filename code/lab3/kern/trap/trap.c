@@ -148,11 +148,13 @@ void exception_handler(struct trapframe *tf) {
     switch (tf->cause) {
     case CAUSE_ILLEGAL_INSTRUCTION:
         cprintf("Illegal instruction at 0x%08x\n", tf->epc);
-        tf->epc += ((*(uint16_t *)tf->epc & 0x3) == 0x3) ? 4 : 2;
+        /* This RV64GC lab uses 16/32-bit instructions. Read only the first
+         * halfword: a 32-bit instruction need not be four-byte aligned. */
+        tf->epc += ((*(const uint16_t *)tf->epc & 0x3) == 0x3) ? 4 : 2;
         break;
     case CAUSE_BREAKPOINT:
         cprintf("Breakpoint at 0x%08x\n", tf->epc);
-        tf->epc += ((*(uint16_t *)tf->epc & 0x3) == 0x3) ? 4 : 2;
+        tf->epc += ((*(const uint16_t *)tf->epc & 0x3) == 0x3) ? 4 : 2;
         break;
     default:
         print_trapframe(tf);

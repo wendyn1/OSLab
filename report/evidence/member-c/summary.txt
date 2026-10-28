@@ -1,0 +1,6 @@
+PASS: existing grading 100/100
+PASS: 16/32-bit illegal instructions and breakpoints return
+PASS: exact EPC deltas and unchanged remaining trapframe
+PASS: 11 other interrupt branches, unknown interrupt/exception
+PASS: Lab2 memory self-check
+PASS: exactly ten 100-tick lines and QEMU exits with code 0

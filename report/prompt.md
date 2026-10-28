@@ -29,7 +29,7 @@
 - C 函数返回后顺序进入 __trapret，由 RESTORE_ALL 和 sret 返回。
 - 不增加无关栈帧。原 sp 满足 16 字节对齐时，减去 288 后仍满足 ABI 对齐。
 
-### 修改边界
+### 修改边界（成员 A 当时的独立任务）
 
 正式源码只修改 kern/trap/trapentry.S 的两个待填位置。保留 SAVE_ALL、trap.h、trap.c、测试与评分脚本。将对应 YOUR CODE 替换为 2414166。
 
@@ -168,6 +168,46 @@ interrupt、未知编号 15、持续时钟到 200 ticks，以及多次 Trap 返�
 - 完整三项测试总分应为 100/100
 ```
 
-## 4. 成员 C：异常处理与集成（待补充）
+## 4. 2411061-牛雨萱：异常处理与集成
 
-请成员 C 补充真实实现和验证提示词。测试替身不等价于成员 C 的实现。
+
+### 需求规格（Spec）
+
+- 前置条件：框架为 RV64GC 内核态路径，tf 是有效现场；对于两类可恢复异常，epc 指向可读、至少两字节对齐的指令。
+- 非法指令输出 `Illegal instruction at 0x%08x\n`；断点输出 `Breakpoint at 0x%08x\n`。
+- 从 epc 读取首个 16 位半字。当前实验的 16/32 位编码中，低两位不等于 3 则跳过 2 字节，否则跳过 4 字节。不以 cause 判断固定长度。
+- 只更改这两类异常的 epc，其他现场字段保持原值；未知异常调用 print_trapframe，不猜测恢复地址。
+- 集成核对 Lab2 的 page_init、Best-Fit、启动映射和中断保护，复测原有评分，并单独验证真实 16/32 位异常和十次时钟输出后的关机。
+- 不扩展到不可读指令地址、48 位及更长指令、用户栈切换或完整缺页恢复。
+
+### 最终提示词
+
+```text
+[PROMPT]
+完成 C 的异常处理、Lab2 依赖检查、最终集成与报告补全。
+
+[RELY]
+现有 SAVE_ALL、RESTORE_ALL、trap_dispatch、struct trapframe、
+CAUSE_ILLEGAL_INSTRUCTION、CAUSE_BREAKPOINT、print_trapframe，
+以及原有 make grade 和 WSL 中的 RISC-V/QEMU 环境。
+
+[GUARANTEE]
+保留已有正确实现与成员署名，仅在 exception_handler 内作必要调整。
+不更改 trap.c 的其他函数、SAVE_ALL、结构体及评分断言。
+记录真实发现和失败，不把已有代码说成本轮从零生成，不虚构测试。
+
+[SPECIFICATION]
+1. 两类异常按框架格式输出，根据首半字编码将 epc 增加 2 或 4。
+2. 其他异常输出现场；两类已处理异常不更改现场的其他字段。
+3. 在临时副本中触发四类真实异常，确认返回后继续执行。
+4. 断言精确 EPC 增量和现场不变量，覆盖其他中断及兜底分支。
+5. 运行原有评分，验证 Lab2 自检、持续时钟和十次输出后正常关机。
+```
+
+### 实际迭代记录
+
+开始核验时 exception_handler 已有两类异常、2/4 字节判定及兜底。本轮保留算法，增加只读指针和适用范围注释，并新增 tools/verify_member_c.py。在临时副本中注入测试，正式初始化流程不添加测试调用。
+
+首次 WSL 命令的 PATH 展开包含 Windows 路径空格和括号，shell 解析失败；改为 `env PATH=...` 显式传参。随后首次评分因 grade.sh 的 CRLF 换行在 sh 中报错；保留失败日志，将脚本转换为 LF，通过 .gitattributes 固定脚本换行，评分断言不变。
+
+复现命令与最终结果见报告 5.4，证据保存在 [member-c](evidence/member-c/summary.txt)。
