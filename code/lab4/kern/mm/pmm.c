@@ -87,7 +87,49 @@ size_t nr_free_pages(void)
     return ret;
 }
 
-//lab2 请补充你在lab2中的代码
+//lab2 dependency integrated by 2414166 (滕鑫); original author retained.
+static void page_init(void){
+//lab2 function1 2411061
+    // detect physical memory space from the device tree
+    uint64_t memory_base = get_memory_base();
+    uint64_t memory_size = get_memory_size();
+    if (memory_base == 0 || memory_size == 0) {
+        panic("No physical memory detected by DTB.");
+    }
+
+    // kernel image is mapped at VA=KERNBASE and PA=0x80200000,
+    // so the virtual-physical offset is their difference
+    va_pa_offset = PHYSICAL_MEMORY_OFFSET;
+
+    // npage is the upper bound of the manageable physical page numbers,
+    // i.e. the physical pages in [nbase, npage) are manageable
+    npage = (memory_base + memory_size) / PGSIZE;
+
+    // place the Page descriptor array right after the kernel image,
+    // aligned up to a page boundary (end is a virtual address)
+    extern char end[];
+    pages = (struct Page *)ROUNDUP((void *)end, PGSIZE);
+
+    // initially mark every manageable page descriptor as reserved
+    for (size_t i = 0; i < npage - nbase; i++) {
+        SetPageReserved(pages + i);
+    }
+
+    // free memory starts right after the descriptor array, aligned up
+    uintptr_t freemem = PADDR((uintptr_t)pages + (npage - nbase) * sizeof(struct Page));
+    freemem = ROUNDUP(freemem, PGSIZE);
+
+    // free memory ends at the physical memory end, aligned down
+    uintptr_t mem_end = ROUNDDOWN(memory_base + memory_size, PGSIZE);
+
+    // hand the complete free pages to the pmm_manager if there are any
+    if (freemem < mem_end) {
+        init_memmap(pa2page(freemem), (mem_end - freemem) / PGSIZE);
+    }
+
+    cprintf("physical memory map:\n");
+    cprintf("  memory: 0x%016lx, [0x%016lx, 0x%016lx].\n", memory_size, memory_base, memory_base + memory_size);
+}
 
 static void enable_paging(void)
 {
@@ -176,6 +218,8 @@ void pmm_init(void)
 // return vaule: the kernel virtual address of this pte
 pte_t *get_pte(pde_t *pgdir, uintptr_t la, bool create)
 {
+    //LAB4 function1 2414166: roll back partial page-table allocation.
+    struct Page *new_table = NULL;
     pde_t *pdep1 = &pgdir[PDX1(la)];
     if (!(*pdep1 & PTE_V))
     {
@@ -188,6 +232,7 @@ pte_t *get_pte(pde_t *pgdir, uintptr_t la, bool create)
         uintptr_t pa = page2pa(page);
         memset(KADDR(pa), 0, PGSIZE);
         *pdep1 = pte_create(page2ppn(page), PTE_U | PTE_V);
+        new_table = page;
     }
     pde_t *pdep0 = &((pte_t *)KADDR(PDE_ADDR(*pdep1)))[PDX0(la)];
     if (!(*pdep0 & PTE_V))
@@ -195,6 +240,13 @@ pte_t *get_pte(pde_t *pgdir, uintptr_t la, bool create)
         struct Page *page;
         if (!create || (page = alloc_page()) == NULL)
         {
+            if (new_table != NULL)
+            {
+                *pdep1 = 0;
+                flush_tlb();
+                set_page_ref(new_table, 0);
+                free_page(new_table);
+            }
             return NULL;
         }
         set_page_ref(page, 1);
@@ -220,7 +272,50 @@ struct Page *get_page(pde_t *pgdir, uintptr_t la, pte_t **ptep_store)
     return NULL;
 }
 
-//LAB4 function1 YOUR CODE
+//LAB4 function1 2414166 滕鑫
+// Remove a present mapping without allocating page-table pages.
+void page_remove(pde_t *pgdir, uintptr_t la)
+{
+    pte_t *ptep = get_pte(pgdir, la, 0);
+    if (ptep == NULL || !(*ptep & PTE_V))
+    {
+        return;
+    }
+    struct Page *page = pte2page(*ptep);
+    *ptep = 0;
+    tlb_invalidate(pgdir, la);
+    if (page_ref_dec(page) == 0)
+    {
+        free_page(page);
+    }
+}
+
+int page_insert(pde_t *pgdir, struct Page *page, uintptr_t la, uint32_t perm)
+{
+    pte_t *ptep = get_pte(pgdir, la, 1);
+    if (ptep == NULL)
+    {
+        return -E_NO_MEM;
+    }
+
+    // Hold the new reference before removing the old one. In particular,
+    // remapping the same page must never return that page to the allocator.
+    page_ref_inc(page);
+    if (*ptep & PTE_V)
+    {
+        if (pte2page(*ptep) == page)
+        {
+            page_ref_dec(page);
+        }
+        else
+        {
+            page_remove(pgdir, la);
+        }
+    }
+    *ptep = pte_create(page2ppn(page), perm);
+    tlb_invalidate(pgdir, la);
+    return 0;
+}
 
 
 
@@ -234,7 +329,7 @@ void tlb_invalidate(pde_t *pgdir, uintptr_t la)
 {
     // flush_tlb();
     // The flush_tlb flush the entire TLB, is there any better way?
-    asm volatile("sfence.vma %0" : : "r"(la));
+    asm volatile("sfence.vma %0, zero" : : "r"(la) : "memory");
 }
 
 static void check_alloc_page(void)

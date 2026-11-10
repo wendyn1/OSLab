@@ -1,0 +1,19 @@
+# Kernel build and generated grading files
+/code/lab4/obj/
+/code/lab4/bin/
+/code/lab4/.gdb.in
+/code/lab4/.qemu.out
+/code/lab4/cscope*
+/code/lab4/tags
+/code/lab4/projlab4-handin.tar.gz
+
+# Local editor and Python artifacts
+.vscode/
+.idea/
+cmake-build-*/
+__pycache__/
+*.py[cod]
+.DS_Store
+Thumbs.db
+
+# Keep report/evidence logs tracked as validation records.
