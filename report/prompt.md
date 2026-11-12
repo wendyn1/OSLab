@@ -37,7 +37,32 @@ Challenge 2 的分析要求：结合 Sv32、Sv39、Sv48 的页表层数、索引
 
 ## 成员二：进程创建及初始化功能
 
-待本人补充实际规格、提示词与迭代记录。
+```text
+[PROMPT]
+完成 proc.c 中模块二：alloc_proc、proc_init、kernel_thread、do_fork、
+copy_thread、copy_mm。只实现内核线程创建，不修改模块一的页映射和模块三的调度。
+
+[RELY]
+proc_struct/context/trapframe 的现有布局；setup_kstack/put_kstack、
+get_pid/hash_proc/find_proc、bootstack、boot_pgdir_pa、local_intr_save/restore；
+kernel_thread_entry、forkret、forkrets 与后续 switch_to 的调用链。
+
+[GUARANTEE]
+内核线程的 PCB、栈、PID、父进程、链表和哈希索引一致；
+失败时释放已取得的资源；模块三接入后首次切换能进入 forkret。
+
+[SPECIFICATION]
+alloc_proc 初始化为 PROC_UNINIT、pid=-1、mm=NULL、内核页表，链表节点有效。
+proc_init 创建 PID 0 idleproc（使用 bootstack），current 指向它，
+再创建 PID 1 initproc，二者为 PROC_RUNNABLE。
+kernel_thread 用 s0/s1 传函数和参数，epc 指向 kernel_thread_entry。
+do_fork 依次分配 PCB、内核栈、复制/共享地址空间、设置现场，
+在中断保护区分配 PID、加入索引，成功返回子 PID。
+copy_thread 设置子线程 a0=0、context.ra=forkret、context.sp=tf，
+保留内核线程的 SPP。copy_mm 当前仅支持 mm=NULL 的内核线程。
+```
+
+编译检查：`make obj/kern/process/proc.o` 成功。曾发现清除 SPP 会使内核线程首次返回的特权级错误，已删除该操作。完整动态验证等待模块三合并。
 
 ## 成员三：进程调度与 Challenge 1
 
