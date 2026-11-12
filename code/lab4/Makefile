@@ -38,7 +38,9 @@ CTYPE	:= c S
 
 LD      := $(GCCPREFIX)ld
 LDFLAGS	:= -m elf64lriscv
-LDFLAGS	+= -nostdlib --gc-sections --print-gc-sections
+# LDFLAGS	+= -nostdlib --gc-sections --print-gc-sections
+# 2411061: 保留未使用段清理，仅关闭逐项清理信息输出。
+LDFLAGS += -nostdlib --gc-sections
 
 OBJCOPY := $(GCCPREFIX)objcopy
 OBJDUMP := $(GCCPREFIX)objdump

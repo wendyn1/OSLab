@@ -89,7 +89,8 @@ static void *__slob_get_free_pages(gfp_t gfp, int order)
 
 static inline void __slob_free_pages(unsigned long kva, int order)
 {
-	free_pages(kva2page(kva), 1 << order);
+	/* 2411061: kva stores a kernel address; convert to the pointer type required by kva2page. */
+	free_pages(kva2page((void *)kva), 1 << order);
 }
 
 static void slob_free(void *b, int size);

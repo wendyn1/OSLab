@@ -240,9 +240,8 @@ copy_thread(struct proc_struct *proc, uintptr_t esp, struct trapframe *tf)
     proc->tf = (struct trapframe *)(proc->kstack + KSTACKPAGE * PGSIZE - sizeof(struct trapframe));
     *(proc->tf) = *tf;
     proc->tf->gpr.a0 = 0;
-    if (esp != 0) {
-        proc->tf->gpr.sp = esp;
-    }
+    /* Integration fix (2411061): a kernel thread needs its own valid stack. */
+    proc->tf->gpr.sp = esp != 0 ? esp : (uintptr_t)proc->tf;
     proc->tf->status |= SSTATUS_SPIE;
     proc->context.ra = (uintptr_t)forkret;
     proc->context.sp = (uintptr_t)proc->tf;
@@ -306,7 +305,8 @@ kernel_thread(int (*fn)(void *), void *arg, uint32_t clone_flags)
     memset(&tf, 0, sizeof(tf));
     tf.gpr.s0 = (uintptr_t)fn;
     tf.gpr.s1 = (uintptr_t)arg;
-    tf.status = read_csr(sstatus) | SSTATUS_SPP | SSTATUS_SPIE;
+    /* Keep interrupts off until sret restores SPIE to SIE. */
+    tf.status = (read_csr(sstatus) | SSTATUS_SPP | SSTATUS_SPIE) & ~SSTATUS_SIE;
     tf.epc = (uintptr_t)kernel_thread_entry;
     return do_fork(clone_flags | CLONE_VM, 0, &tf);
 }
@@ -341,4 +341,32 @@ proc_init(void)
 }
 
 
-//LAB4 function3 YOUR CODE
+//LAB4 function3 2411061
+void
+cpu_idle(void)
+{
+    while (1) {
+        if (current->need_resched) {
+            schedule();
+        }
+    }
+}
+
+void
+proc_run(struct proc_struct *proc)
+{
+    if (proc != current) {
+        bool intr_flag;
+        local_intr_save(intr_flag);
+        struct proc_struct *prev = current;
+        current = proc;
+        /* The framework lsatp helper encodes RV32; this kernel uses Sv39. */
+        uintptr_t satp_value = ((uintptr_t)SATP_MODE_SV39 << 60) |
+                               (proc->pgdir >> RISCV_PGSHIFT);
+        asm volatile("csrw satp, %0" :: "r"(satp_value) : "memory");
+        flush_tlb();
+        switch_to(&prev->context, &proc->context);
+        /* Executed when this thread is scheduled back, on its original stack. */
+        local_intr_restore(intr_flag);
+    }
+}

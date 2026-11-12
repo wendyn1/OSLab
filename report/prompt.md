@@ -62,8 +62,35 @@ copy_thread 设置子线程 a0=0、context.ra=forkret、context.sp=tf，
 保留内核线程的 SPP。copy_mm 当前仅支持 mm=NULL 的内核线程。
 ```
 
-编译检查：`make obj/kern/process/proc.o` 成功。曾发现清除 SPP 会使内核线程首次返回的特权级错误，已删除该操作。完整动态验证等待模块三合并。
+此前编译检查：`make obj/kern/process/proc.o` 成功。曾发现清除 SPP 会使内核线程首次返回的特权级错误，已删除该操作。当时完整动态验证等待模块三合并；本轮发现并修正默认 sp 和 SIE 问题后，原有创建/调度测试与补充动态验证均通过，详见成员三记录及总报告。
 
 ## 成员三：进程调度与 Challenge 1
 
-待本人补充实际规格、提示词与迭代记录。
+**负责人：2411061 牛雨萱。** 
+
+```text
+[PROMPT]
+根据当前 Lab4 手册核验成员一、二完成情况，
+完成模块三 cpu_idle、schedule、proc_run、switch_to，解答 Challenge 1，
+运行完整构建、原有课程评分和补充验证。
+
+[RELY]
+现有 proc_struct/context、proc_list/current/idleproc、PROC_RUNNABLE、
+local_intr_save/restore、lsatp、flush_tlb、REGBYTES/LOAD/STORE，
+以及成员二准备的 context.ra/sp 和 TrapFrame 首次运行链路。
+
+[GUARANTEE]
+不改变 context 布局和公共函数签名，不改课程评分断言。
+切换 current、页表、执行现场时关中断，最终恢复进入前的中断状态。
+保留成员一、二原有成果和署名，必要集成修复单独记录。
+不把目标文件编译通过当作首次运行成功，不虚构原始生成过程。
+
+[SPECIFICATION]
+从当前线程之后轮转选择 runnable，空链表/全阻塞退回 idle，维护 runs。
+proc_run 写入正确 RV64 Sv39 satp 并执行 sfence.vma。
+switch_to 保存恢复 ra/sp/s0-s11，ret 到目标现场。
+核对新线程的内核栈、SPP/SPIE/SIE，说明 TrapFrame 与 context 的区别。
+验证原有 PMM/进程创建/调度评分，再检查 idle 回退、轮转顺序、
+多次切换寄存器和中断状态、失败清理及切换后连续时钟。
+解释 Challenge 1 的 CSR、嵌套临界区和单核适用范围。
+```

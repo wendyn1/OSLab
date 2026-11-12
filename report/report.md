@@ -6,8 +6,8 @@
 | --- | --- |
 | **实验名称** | Lab 4：进程管理 |
 | **小组成员** | 2411061-牛雨萱、2410721-何熹淳、2414166-滕鑫 |
-| **记录日期** | 2026-11-10 |
-| **报告状态** | 成员一、二内容已补全；成员三与完整集成验收待补充 |
+| **记录日期** | 2026-11-12 |
+| **报告状态** | 三个模块与两项 Challenge 已实现；完整构建、原有评分 30/30、补充集成验证通过 |
 
 ### 小组分工
 
@@ -16,8 +16,8 @@
 | 成员 | 负责的练习/模块 | 当前状态 |
 | --- | --- | --- |
 | 2414166-滕鑫 | 功能模块一：虚拟内存页操作功能；Lab2/Lab3 前置代码整合；Challenge 2 | 已实现，独立验证通过 |
-| 2410721-何熹淳 | 功能模块二：进程创建及初始化功能 | 已实现，目标文件编译通过 |
-| 成员三（姓名、学号待填写） | 功能模块三：进程调度；Challenge 1；合并后的运行调试 | 实现、说明与验证结果待补充 |
+| 2410721-何熹淳 | 功能模块二：进程创建及初始化功能 | 六个函数已有；本轮修正首次运行栈与状态后动态验证通过 |
+| 2411061-牛雨萱 | 功能模块三：进程调度；Challenge 1；合并后的运行调试 | 已实现，原有评分与补充验证通过 |
 
 **实验报告分工：**
 
@@ -25,7 +25,7 @@
 | --- | --- |
 | 2414166-滕鑫 | 报告骨架、前置代码整合、功能模块一、spec/prompt、问题处理、独立测试、Challenge 2 和相关原理总结 |
 | 2410721-何熹淳 | 进程创建及初始化模块的实现、spec/prompt、调试过程和验证结果 |
-| 成员三 | 进程调度模块、Challenge 1、spec/prompt、调试过程和完整集成验收 |
+| 2411061-牛雨萱 | 进程调度模块、Challenge 1、spec/prompt、调试过程和完整集成验收 |
 
 ***
 
@@ -55,7 +55,7 @@
 | --- | --- | --- |
 | 2414166-滕鑫 | Codex | 模块一实现、Challenge2、依赖整合、独立测试和报告整理 |
 | 2410721-何熹淳 | Codex | 进程创建模块实现与编译检查 |
-| 成员三 | 待填写 | 待本人补充实际使用情况 |
+| 2411061-牛雨萱 | Codex | 模块三、Challenge 1、首次运行集成修复及完整验收 |
 
 ***
 
@@ -78,8 +78,8 @@ kern_init → pmm_init → pic_init / idt_init → vmm_init
 2. **维护页映射。** 实现 `page_insert()`、`page_remove()`，同步 PTE、引用计数和 TLB，处理内存不足回滚。
 3. **建立虚拟内存描述框架。** 使用已提供的 `mm_struct`、`vma_struct` 及其管理函数，现有 VMA 自检已通过。
 4. **创建和初始化内核线程。** 建立 PCB、分配内核栈和 PID，设置首次运行现场并登记线程。
-5. **调度与执行。** 由成员三补充可运行线程选择、页表切换和寄存器上下文切换。
-6. **联合验收。** 三个模块合并后完成完整构建和课程评分；当前只记录已完成的成员一独立验证。
+5. **调度与执行。** 轮转选择可运行线程，在关中断区域切换 current、Sv39 页表和寄存器上下文。
+6. **联合验收。** 完整编译链接、课程三项评分 30/30；回归成员一独立测试，并补充首次运行现场、失败清理、idle 回退、轮转和中断状态测试。
 
 ***
 
@@ -193,7 +193,7 @@ get_pte 下层分配失败时只回滚本次新建的上层页表，保留已有
 | 开启分页时缺少过渡恒等映射，栈顶加载缺少低位 | 迁移前次实验已验证的两项启动修正；QEMU 实际进入内核完成全部独立检查 |
 | `get_pte()` 的部分分配失败路径没有回收新上层页表 | 增加有条件回滚；分别注入零次、一次分配额度，确认空闲页数、根项、目标页引用不变 |
 | Lab3 有测试专用的定时关机代码 | 不迁移关机阈值，保留时钟重设、计数、周期输出，避免干扰 Lab4 线程运行 |
-| 完整 `make` 链接失败 | 实际日志显示缺少 `proc_init`、`cpu_idle`，属于成员二、三尚未实现的接口；记录该边界，以临时入口验证成员一，不篡改正式入口 |
+| 成员一独立开发阶段完整 `make` 链接失败 | 当时日志显示缺少 `proc_init`、`cpu_idle`，记录该阶段边界，以临时入口验证成员一；本轮整合后完整链接通过 |
 
 
 
@@ -215,11 +215,16 @@ get_pte 下层分配失败时只回滚本次新建的上层页表，保留已有
 
 #### 实现迭代过程
 
-实现时核对了 `SSTATUS_SPP`：内核线程必须保留 S 态返回标志，不能在 `copy_thread` 中无条件清除。修正后 `proc.c` 目标文件在 WSL RISC-V 工具链下编译成功。模块三仍未实现，因此目前不把独立编译当作完整运行通过。
+成员二此前核对了 `SSTATUS_SPP`：内核线程必须保留 S 态返回标志，不能在 `copy_thread` 中无条件清除，并完成目标文件编译。本轮首先核验其六个函数均已存在，但发现仍有两项首次运行缺陷：
+
+1. `kernel_thread()` 的临时现场清零后 `sp=0`，`copy_thread()` 在 stack=0 时未补内核栈。修正为 `tf->gpr.sp = esp != 0 ? esp : (uintptr_t)proc->tf`，保证 `sret` 后函数和中断处理使用有效栈。
+2. 线程模板直接保留当前 `SIE`。修正为设置 SPP/SPIE 并清除 SIE，避免 RESTORE_ALL 尚未恢复完现场时提前开中断；由 sret 恢复 SPIE 到 SIE。
+
+`do_fork` 保留原来的直接就绪状态赋值。最终原有 Process Create 测试、首次进入 initproc、多个线程往返切换和 copy_mm 失败清理均已实际通过。
 
 ### 功能模块：**【功能模块三：进程调度（设计提示词借助 AI 完成）】**
 
-**负责人：** 成员三（姓名、学号待填写）。
+**负责人：** 2411061-牛雨萱。
 
 #### 模块功能描述
 
@@ -227,19 +232,81 @@ get_pte 下层分配失败时只回滚本次新建的上层页表，保留已有
 
 #### Spec、最终提示词与实现思路
 
-待成员三依据实际实现补充调度条件、临界区、上下文保存恢复、提示词和正确性分析。
+**前置条件：** idleproc、current 和进程链表已初始化；线程的 pgdir 为有效物理根地址，context/TrapFrame 与结构体布局一致；当前环境为单 hart、RV64/Sv39。
+
+**后置条件：** 选中线程为 RUNNABLE 或 idle；被切换线程的 ra/sp/s0～s11 保存，目标线程的对应寄存器恢复；current、页表和实际执行现场一致；已运行过的线程返回调度调用点后恢复原中断状态。
+
+**不变量：** 不改变 context 布局和接口；只在关中断区域更新调度关键状态；同线程不执行底层切换；无 runnable 时保留 idle 运行。
+
+`cpu_idle()` 循环检查 `need_resched`。`schedule()` 保存中断状态并清除标志，从当前节点之后遍历；若 current 为 idle，则从表头开始。跳过表头和睡眠/僵尸线程，绕一圈仍无候选时选择 idle，更新 `runs`，必要时调用 `proc_run()`。这是协作式轮转选择，没有实现时间片抢占；时钟只计数，不自动发起调度。
+
+`proc_run()` 先保存 prev，再更新 current、写目标 satp、执行 `sfence.vma`，最后调用 `switch_to()`。原框架 `lsatp(unsigned int)` 使用 SATP32_MODE，本轮保留该辅助函数原样，在模块三 proc_run 内直接构造 `(8UL << 60) | (pgdir >> 12)`，ASID 为 0。写 satp 不代替 TLB 刷新，这与课堂记录强调的两步操作一致。
+
+`switch_to()` 的槽位顺序是 ra、sp、s0～s11，RV64 共 112 字节，偏移从 0 到 104。a0/a1 分别指向旧、新 context，先全部存入旧现场，再从新现场加载，最后 ret 使用恢复后的 ra。调用者保存寄存器由函数调用边界与编译器处理；该接口不承担完整异步 Trap 的 GPR/CSR 保存。
+
+首次运行时 context.ra 已被成员二设为 forkret，因此流程为：
+
+```text
+idle → schedule → proc_run → switch_to
+     → forkret → forkrets(current->tf) → __trapret → sret
+     → kernel_thread_entry → s0 中的函数(s1 中的参数)
+```
+
+此处 sret 根据保存的 SPP 返回 S 态，不应强制降到 U 态。旧线程稍后被恢复时，会从自己的 switch_to 调用之后继续，使用自己栈上的 intr_flag 恢复中断；首次运行线程则通过 TrapFrame 的 SPIE 建立初始使能状态。
+
+```text
+[PROMPT]
+根据当前 Lab4 手册核验成员一、二完成情况，
+完成模块三 cpu_idle、schedule、proc_run、switch_to，解答 Challenge 1，
+运行完整构建、原有课程评分和补充验证。
+
+[RELY]
+现有 proc_struct/context、proc_list/current/idleproc、PROC_RUNNABLE、
+local_intr_save/restore、lsatp、flush_tlb、REGBYTES/LOAD/STORE，
+以及成员二准备的 context.ra/sp 和 TrapFrame 首次运行链路。
+
+[GUARANTEE]
+不改变 context 布局和公共函数签名，不改课程评分断言。
+切换 current、页表、执行现场时关中断，最终恢复进入前的中断状态。
+保留成员一、二原有成果和署名，必要集成修复单独记录。
+不把目标文件编译通过当作首次运行成功，不虚构原始生成过程。
+
+[SPECIFICATION]
+从当前线程之后轮转选择 runnable，空链表/全阻塞退回 idle，维护 runs。
+proc_run 写入正确 RV64 Sv39 satp 并执行 sfence.vma。
+switch_to 保存恢复 ra/sp/s0-s11，ret 到目标现场。
+核对新线程的内核栈、SPP/SPIE/SIE，说明 TrapFrame 与 context 的区别。
+验证原有 PMM/进程创建/调度评分，再检查 idle 回退、轮转顺序、
+多次切换寄存器和中断状态、失败清理及切换后连续时钟。
+解释 Challenge 1 的 CSR、嵌套临界区和单核适用范围。
+```
 
 #### 实现迭代过程
 
-待成员三补充实际发现的 bug、定位与修复过程，测试结果见第五节对应位置。
+| 实际发现/过程 | 处理与结果 |
+| --- | --- |
+| 模块三三个文件保留 YOUR CODE 占位 | 补齐 cpu_idle/proc_run/schedule/switch_to，保留 LAB4 function3 2411061 |
+| 模块二默认 sp=0、SIE 未清零 | 在首次切换前修正；实际线程入口栈范围、对齐和现场断言通过 |
+| lsatp 是 RV32 编码，与当前 Sv39 环境不匹配 | 改为 RV64 mode=8 和物理根页号，proc_run 显式刷新 TLB；切换后读取 satp 断言通过 |
+| 初次修复使用 uintptr_t，riscv.h 被独立引用时类型未定义 | 编译报告 unknown type name，改为 unsigned long，完整编译链接通过 |
+| 只看到线程打印不足以证明上下文正确 | 临时副本加入遵守 ABI 的汇编探针，保存测试调用者现场，给 s0～s11 写入模式值，多次 schedule 后逐一比较 |
+| 原有 do_exit 的行为是 panic/monitor | 保留框架行为，不扩展线程退出回收；课程脚本以 readline 为停止观测点 |
 
 ### 扩展练习：Challenge 1——开关中断
 
-**负责人：** 成员三。
+**负责人：** 2411061-牛雨萱。
 
 说明语句 `local_intr_save(intr_flag); ... local_intr_restore(intr_flag);` 是如何实现开关中断的。
 
-**解答：** 待成员三补充。
+**解答：** `local_intr_save(x)` 展开为 `do { x = __intr_save(); } while (0)`。`__intr_save()` 读取 sstatus.SIE；原来为 1 时调用 `intr_disable()` 清零 SIE 并返回 1，原来为 0 则直接返回 0。因此保存的是“进入临界区前是否开中断”，而不是完整 sstatus。
+
+`local_intr_restore(x)` 调用 `__intr_restore(x)`，仅在 x 为真时通过 `intr_enable()` 设置 SIE。关中断分别由 `clear_csr(sstatus, SSTATUS_SIE)`、开中断由 `set_csr` 完成，只改变 SIE，不覆盖 SPP/SPIE 等其他位。SIE 是 S 态全局使能位，具体来源仍受 sie 寄存器控制。
+
+嵌套示例：原来 SIE=1，外层 save 得到 1 并关中断，内层 save 得到 0；内层 restore(0) 保持关闭，外层 restore(1) 才重新开启。若原来就关闭，则最外层恢复后仍关闭。每层必须使用独立局部 flag，并且受保护代码不能自行开中断，否则不能保证临界区语义。`do/while(0)` 让宏在 if/else 等位置表现为单个语句。
+
+schedule 与 proc_run 嵌套时，内层记录的通常是“已关闭”，不会提前打开；旧线程再次恢复才返回外层并恢复原状态。新线程首次运行没有旧调用栈，使用预设 TrapFrame 经 sret 开启中断。补充测试实际检查原来关闭、原来开启、两层嵌套，以及两种使能状态下的多次线程切换。
+
+此机制只屏蔽当前 hart 的 S 态可屏蔽中断，不屏蔽同步异常，也不替代多核锁或阻止更高特权级固件事件。当前实验单 hart 下用于保护 current、页表和 context 的一致性；不声称解决完整多核同步。
 
 ### 扩展练习：Challenge 2——深入理解不同分页模式的工作原理（思考题）
 
@@ -289,11 +356,12 @@ Sv32 面向基本页只需一次这样的向下步骤，Sv39 需要两次，Sv48
 
 ### 5.1 模块一独立验证的方法和结果
 
+
 从仓库根目录在 WSL 中进入 `code/lab4`，将本机工具链加入 PATH 后运行：
 
 ```bash
 cd code/lab4
-export PATH=/opt/riscv/riscv64-unknown-elf-toolchain-10.2.0-2020.12.8-x86_64-linux-ubuntu14/bin:$PATH
+export PATH="/mnt/e/OS/riscv64-unknown-elf-toolchain-10.2.0-2020.12.8-x86_64-linux-ubuntu14/bin:/usr/local/bin:/usr/bin:/bin"
 python3 tools/test_member1.py
 ```
 
@@ -311,7 +379,7 @@ python3 tools/test_member1.py
 | 活动页表建立、读内存、替换后读新页、删除后重建再读 | PASS |
 | 非法指令和断点异常返回 | PASS |
 | 连续 110 次时钟中断及 Trap 返回 | PASS |
-| 完整 Lab4 构建与课程总评分 | 尚待成员二、三完成后联合验收 |
+| 完整 Lab4 构建与课程总评分 | 当时未完成；本轮联合验收见 5.3，30/30 |
 
 实际输出包含：
 
@@ -349,40 +417,89 @@ check_vma_struct() succeeded!
 
 #### 5.1.3 独立验证完成结果
 
-图 5-3 显示 `[Member1] ALL TESTS PASS` 和脚本最终的 `PASS: member1 tests`，随后返回 WSL 命令提示符，说明模块一的现有独立检查全部通过。测试证据已保存到 `report/evidence/member1/`。完整线程创建、调度与课程评分仍需成员二、三完成后联合验证。
+图 5-3 显示 `[Member1] ALL TESTS PASS` 和脚本最终的 `PASS: member1 tests`，随后返回 WSL 命令提示符，说明模块一的现有独立检查全部通过。原始证据保存在 `report/evidence/member1/`；本轮回归与完整线程创建、调度、课程评分证据见 5.3。
 
 ![图 5-3：模块一独立验证全部通过及日志保存位置](images/member1_validation_pass.png)
 
 ### 5.2 功能模块二：进程创建及初始化验证
 
-在 WSL 中运行 `cd code/lab4 && make obj/kern/process/proc.o`，结果为 `+ cc kern/process/proc.c`，退出码 0。`idleproc` / `initproc` 的动态检查及失败清理测试需在模块三接入并完成链接后运行，目前不填入未运行的 PASS。
+此前在 WSL 中运行 `cd code/lab4 && make obj/kern/process/proc.o`，结果为 `+ cc kern/process/proc.c`，退出码 0。本轮模块三接入后，原有 `[Test Process Create] PASS` 验证 idleproc/initproc 的 PID、状态、父线程、共享内核地址空间和 context；initproc 实际进入入口并输出规定字符串。
+
+补充验证检查空白 PCB、初始 TrapFrame 的 sp、SPP/SPIE/SIE、context.ra/sp。将 current->mm 临时设为非空以触发 copy_mm 的错误路径，重复 20 次检查错误码、nr_process 及空闲页数不变；另检查 MAX_PROCESS 上限错误。测试只在临时副本执行，并在检查后恢复测试状态。该测试未穷举所有分配器故障路径，PCB/内核栈分配失败的清理由代码路径核对。
 
 ### 5.3 功能模块三与完整集成验收
 
-待成员三在合并完成后补充完整构建、调度切换、线程入口执行和 `make grade` 的原始结果、分数及证据。当前正式源码仍缺少 `proc_init`、`cpu_idle` 等实现，不能完整链接。
+#### 5.3.1 完整编译与链接
 
-### 5.4 对照练习页的当前核验
+在 WSL 中执行以下命令：
 
-| 手册要求 | 对应实现/验证 | 当前结论 |
+```bash
+cd /mnt/e/OS/OSLab/code/lab4
+export PATH="/mnt/e/OS/riscv64-unknown-elf-toolchain-10.2.0-2020.12.8-x86_64-linux-ubuntu14/bin:/usr/local/bin:/usr/bin:/bin"
+make clean
+make
+```
+
+图 5-4 为修正类型警告及关闭链接段清理信息后重新执行 `make` 的截图，展示各源文件编译、`+ ld bin/kernel` 链接以及 objcopy 生成 `bin/ucore.img` 的完整过程。
+
+![图 5-4：修复后 make 完整编译、链接与镜像生成](images/lab4_make_build.png)
+
+#### 5.3.2 QEMU 启动与内核线程运行
+
+执行 `make qemu`。图 5-5 显示 OpenSBI v0.4、QEMU Virt 平台、当前 hart 0 和通过 DTB 检测到的 128 MB 内存，随后进入内核。
+
+![图 5-5：make qemu 启动环境与内存信息](images/lab4_qemu_boot.png)
+
+图 5-6 显示物理页、页表、SLOB 与 VMA 自检通过，时钟完成初始化。随后输出：
+
+```text
+this initproc, pid = 1, name = "init"
+To U: "Hello world!!".
+To U: "en.., Bye, Bye. :)"
+```
+
+这证明 initproc 已从 idleproc 手中接管 CPU，经首次运行恢复链路进入线程函数并执行规定输出。
+
+![图 5-6：内存自检、initproc 执行与框架退出提示](images/lab4_qemu_initproc.png)
+
+图中的 `kernel panic ... process exit!!` 来自框架 `do_exit()` 内明确写出的 `panic("process exit!!.\n")`。init_main 返回后，kernel_thread_entry 调用 do_exit，随后进入内核监控器。这是当前实验保留的退出占位实现，不是未处理异常导致的调度崩溃，也不能表述为系统正常关机。
+
+#### 5.3.3 原有课程评分
+
+执行：
+
+```bash
+make grade
+```
+
+使用实验框架的注入和评分流程，临时目录 `/tmp/lab4_grade` 属于原有评分机制。图 5-7 为类型与链接输出调整后重新执行 `make grade` 的截图，三项检查均为 OK，总分仍为 30/30。
+
+![图 5-7：make grade 三项检查与总分](images/lab4_grade_pass.png)
+
+| 评分项 | 实际结果 | 覆盖范围 |
 | --- | --- | --- |
-| 补齐 Lab2/Lab3 对应位置 | 按区域迁移；分配器、页表、异常与连续时钟自检 | 成员一已完成 |
-| 建立或更新映射、删除映射 | `page_insert()`、`page_remove()`；课程 PMM 和补充检查 | 已完成，独立验证通过 |
-| 同步 PTE、引用计数、TLB | 同页/异页映射、权限更新、真实访存 | 已完成，独立验证通过 |
-| 分配失败返回错误且保持状态干净 | 零次/一次分配额度注入、已有父表失败路径 | 已完成，独立验证通过 |
-| 进程创建及初始化 | 成员二负责 | 待补充 |
-| 进程调度与上下文切换 | 成员三负责 | 待补充 |
-| Challenge 1 | 成员三负责 | 待补充 |
-| Challenge 2 | 第四节分页模式及 `get_pte()` 分析 | 已完成 |
-| spec/prompt、调试记录与总结 | 本报告及 `prompt.md` | 成员一已完成，其余待补充 |
-| 完整课程评分 | 合并后执行 | 尚未完成 |
+| PMM | OK，10/10 | 页映射、引用计数、删除幂等性 |
+| Process Create | OK，10/10 | idle/init 的基本 PCB、状态、栈与 context |
+| Schedule | OK，10/10 | 测试线程多次主动调度及 initproc 的规定输出 |
+| 总分 | 30/30 | 原有课程评分全部通过 |
+
+#### 5.3.4 命令行警告与提示的说明
+
+此前运行曾出现以下类型警告和链接信息，修复前的警告记录保存在 [manual-build-warnings.log](evidence/member3/manual-build-warnings.log)，仅作为历史调试证据。各项处理如下。
+
+| 输出 | 原因及本次影响 | 是否可以消除 |
+| --- | --- | --- |
+| kmalloc.c 的 `-Wint-conversion` | kva 是 unsigned long，kva2page 的参数为 void *，原调用处缺少显式地址转换 | 已改为 `kva2page((void *)kva)`，明确其为内核地址转换；不改变释放页数和分配器逻辑 |
+| 原有评分测试的 `-Wincompatible-pointer-types` | 原 test_lab4_thread 返回 void，而 kernel_thread 接收返回 int 的函数指针，接口类型不一致 | 已将定义改为 `static int test_lab4_thread(void *arg)`，保留无限循环、调度过程及全部评分断言，在循环后补充 `return 0` 满足返回契约，不使用函数指针强制转换；类型修复处附 2411061 注释 |
+| `removing unused section` | 链接器报告移除未引用代码或数据段，不是编译错误 | 已从 Makefile 的 LDFLAGS 删除 `--print-gc-sections`，保留 `--gc-sections`；继续裁剪未使用段，仅关闭逐项清理信息，不屏蔽编译警告或错误 |
+| 评分编译输出挤在一长行 | 原有 grade.sh 使用 echo 配合命令替换打印 make 输出，将换行折叠为空格 | 可以调整脚本输出方式；仅影响可读性 |
+| `kernel panic ... process exit!!` | 框架 do_exit 主动调用 panic，发生在 initproc 正确打印并返回之后 | 真正改变该行为需实现退出状态、调度和资源回收，或改变框架退出策略；不能仅删除 panic 就声称实现正确退出 |
 
 ***
 
 ## 六、实验总结与收获
 
 ### 对操作系统的理解
-
-以下先填写成员一完成部分，成员二、三后续补充线程创建和调度相关认识。
 
 | 实验知识点 | 对应 OS 原理 | 联系与差异 |
 | --- | --- | --- |
@@ -391,8 +508,15 @@ check_vma_struct() succeeded!
 | TLB 失效 | 地址翻译缓存一致性 | 软件写页表不等于旧缓存立即消失；单 hart fence 不等于多核 shootdown |
 | Best-Fit | 连续物理内存分配与外部碎片 | 页表接口申请的页由分配器提供，映射机制和分配策略相互配合但职责不同 |
 | `mm_struct`、VMA | 虚拟地址空间组织 | 描述逻辑区域，不能单凭 VMA 的存在就认定底层页已映射 |
+| PCB、PID 与进程链表 | 执行实体与资源管理 | PCB 不是 CPU 本身；线程创建后登记为就绪，不代表已开始执行 |
+| context 与 TrapFrame | 同步调用边界与异步现场保护 | context 保存 ra/sp/s0～s11；TrapFrame 保存较完整的 GPR/CSR，首次运行借用异常返回机制 |
+| schedule 与 idle | 调度策略、空闲处理 | 当前是协作式轮转，idle 是无其他候选时的保底，不实现时间片抢占 |
+| satp 与 sfence.vma | 地址空间切换 | 根页表指针与 TLB 状态分别维护，当前内核线程共享地址空间 |
+| 保存/恢复 SIE | 临界区与原子性 | 保留进入前的状态支持嵌套，适用当前单 hart，不能代替多核锁 |
 
-OS 原理中重要、但本次实现未覆盖的内容包括按需分页、页面置换、交换区、写时复制、完整用户进程隔离、多核页表同步、大页拆分合并和 ASID 管理。成员二、三还将完成线程创建和调度，本报告不提前声称这些结果。
+OS 原理中重要、但本次实现未覆盖的内容包括按需分页、页面置换、交换区、写时复制、完整用户进程隔离、多核页表同步、大页拆分合并和 ASID 管理，以及完整退出回收、wait/exec、抢占调度和优先级机制。
+
+课堂提出的 PID 回绕问题：现有 get_pid 在达到 MAX_PID 后从 1 重新查找，通过扫描 proc_list 避免与仍存活的 PID 冲突，并使用 next_safe 减少不必要扫描。它不会分配保留的 idle PID 0，但不能永久阻止已退出进程的历史 PID 被复用，也不能消除外部长期持有旧 PID 的歧义。课堂的“只增不减”应理解为有限范围内的分配趋势，不能替代碰撞检查或世代标识。
 
 ### AI 协作开发的经验
 
@@ -401,11 +525,6 @@ OS 原理中重要、但本次实现未覆盖的内容包括按需分页、页�
 3. 保持原作者注释，按功能区域迁移 Lab2/Lab3，保留 Lab4 新增的 `forkrets`、虚拟内存和进程接口。
 4. 同时检查数据结构与真实行为：PTE 值正确不代表 TLB 已更新，因此使用活动页表上的实际访存验证替换结果。
 5. 用故障注入确认失败回滚和空闲页数量恢复，避免仅依靠正常运行发现资源泄漏。
-6. 将成员一独立验证与完整实验验收分开记录；当前 PASS 不能代替线程创建、调度或课程总评分。
-
-### 参考资料
-
-- [课程 Lab4 练习要求](http://oslab.mobisys.top/lab2026/_book/lab4/lab4_2_1_exercises.html)
-- [课程 Lab4 实验报告要求](http://oslab.mobisys.top/lab2026/_book/lab4/lab4_5_labs_requirement.html)
-- [RISC-V Supervisor-Level ISA：Sv32/Sv39/Sv48、SFENCE.VMA](https://docs.riscv.org/reference/isa/v20260120/priv/supervisor.html)
-- 小组已完成的 Lab3 本地代码：`OSLab-lab3/code/lab3`，本次按功能迁移，保留作者标注。
+6. 区分独立编译、局部动态验证和完整验收。成员二曾编译通过，但需要核对 sp 与 sstatus，只有接通首次运行链路才能暴露这类集成问题。
+7. 将同步 context 切换与异步 Trap 现场分开建模，明确保存范围、恢复入口和中断状态，避免机械保存所有寄存器或错误修改 SPP。
+8. 原有评分通过后，以明确的空队列、全阻塞、寄存器模式值、失败返回和实际时钟检查补齐覆盖；不修改评分断言制造通过结果。

@@ -65,7 +65,8 @@ void test_lab4_process_create(void)
 static volatile int test_thread1_ran;
 static volatile int test_thread2_ran;
 
-static void test_lab4_thread(void *arg)
+/* 2411061: match kernel_thread's int (*)(void *) interface; keep test logic unchanged. */
+static int test_lab4_thread(void *arg)
 {
     int id = (int)(intptr_t)arg;
     int i;
@@ -81,6 +82,7 @@ static void test_lab4_thread(void *arg)
         current->need_resched = 1;
         schedule();
     }
+    return 0; /* 2411061: satisfy the int return contract; the loop above does not exit. */
 }
 
 void test_lab4_schedule(void)

@@ -1,0 +1,7 @@
+PASS: full kernel compile and link
+PASS: member1 mapping/trap/timer regression
+PASS: original Lab4 grading (see grade.log for score)
+PASS: nested interrupt save/restore
+PASS: PCB, initial stack/status, fork failure cleanup
+PASS: empty/blocked idle fallback and round-robin order
+PASS: s0-s11, stack/return, SIE=0/1, Sv39 satp and continuous timer
