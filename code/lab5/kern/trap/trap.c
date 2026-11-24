@@ -8,6 +8,7 @@
 #include <assert.h>
 #include <console.h>
 #include <vmm.h>
+#include <cow.h>
 #include <kdebug.h>
 #include <unistd.h>
 #include <syscall.h>
@@ -96,8 +97,38 @@ void print_regs(struct pushregs *gpr)
 extern struct mm_struct *check_mm_struct;
 
 //lab3 请补充你在lab3中的代码
+static void interrupt_handler(struct trapframe *tf) {
+    uintptr_t irq = tf->cause & (~(uintptr_t)0 >> 1);
+    if (irq == IRQ_S_TIMER) {
+        clock_set_next_event();
+        if (++ticks % TICK_NUM == 0) {
+            print_ticks();
+        }
+        if (current != NULL) {
+            current->need_resched = 1;
+        }
+        return;
+    }
+    print_trapframe(tf);
+}
 
-//lab5 function1 YOUR CODE update exception_handler
+//lab5 function1 2414166 update exception_handler
+static void exception_handler(struct trapframe *tf) {
+    if (tf->cause == CAUSE_USER_ECALL && current != NULL && !trap_in_kernel(tf)) {
+        tf->epc += 4;  // ECALL is a 32-bit instruction.
+        syscall();
+        return;
+    }
+    if (tf->cause == CAUSE_STORE_PAGE_FAULT && current != NULL &&
+        !trap_in_kernel(tf) && cow_resolve_write(current->mm, tf->tval) == 0) {
+        return;  // Retry the store after resolving COW.
+    }
+    print_trapframe(tf);
+    if (trap_in_kernel(tf) || current == NULL) {
+        panic("unhandled supervisor exception");
+    }
+    do_exit(-E_KILLED);
+}
 
 
 static inline void trap_dispatch(struct trapframe *tf)
@@ -117,7 +148,7 @@ static inline void trap_dispatch(struct trapframe *tf)
 /* *
  * trap - handles or dispatches an exception/interrupt. if and when trap() returns,
  * the code in kern/trap/trapentry.S restores the old CPU state saved in the
- * trapframe and then uses the iret instruction to return from the exception.
+ * trapframe and then uses sret to return from the exception.
  * */
 void trap(struct trapframe *tf)
 {

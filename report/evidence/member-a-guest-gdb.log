@@ -1,0 +1,28 @@
+The target architecture is set to "riscv:rv64".
+0x0000000000001000 in ?? ()
+Hardware assisted breakpoint 1 at 0x800000
+
+Breakpoint 1, 0x0000000000800000 in ?? ()
+0x0000000000800002 in ?? ()
+=> 0x800002:	ecall
+pc             0x800002	0x800002
+a0             0x12	18
+a1             0x0	0
+sp             0x803000	0x803000
+Temporary breakpoint 2 at 0xffffffffc0203fe6: file kern/syscall/syscall.c, line 69.
+
+Temporary breakpoint 2, syscall () at kern/syscall/syscall.c:69
+69	    struct trapframe *tf = current->tf;
+pc             0xffffffffc0203fe6	0xffffffffc0203fe6 <syscall>
+a0             0xffffffffc0208ec0	-1071608128
+sp             0xffffffffc0208ea0	0xffffffffc0208ea0
+0xffffffffc0208fd8:	0x0000000000000008
+0xffffffffc0208fc8:	0x0000000000800006
+Hardware assisted breakpoint 3 at 0x800006
+
+Breakpoint 3, 0x0000000000800006 in ?? ()
+=> 0x800006:	li	t0,17
+pc             0x800006	0x800006
+a0             0x11	17
+sp             0x803000	0x803000
+[Inferior 1 (process 1) detached]

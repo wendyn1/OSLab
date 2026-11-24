@@ -1,4 +1,5 @@
 #include <vmm.h>
+#include <cow.h>
 #include <sync.h>
 #include <string.h>
 #include <assert.h>
@@ -235,7 +236,7 @@ bool copy_from_user(struct mm_struct *mm, void *dst, const void *src, size_t len
 
 bool copy_to_user(struct mm_struct *mm, void *dst, const void *src, size_t len)
 {
-    if (!user_mem_check(mm, (uintptr_t)dst, len, 1))
+    if (!cow_prepare_user_write(mm, (uintptr_t)dst, len))
     {
         return 0;
     }

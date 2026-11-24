@@ -5,6 +5,7 @@
 #include <memlayout.h>
 #include <mmu.h>
 #include <pmm.h>
+#include <proc.h>
 #include <sbi.h>
 #include <dtb.h>
 #include <stdio.h>
@@ -88,6 +89,49 @@ size_t nr_free_pages(void)
 }
 
 //lab2 请补充你在lab2中的代码
+//lab2 dependency integrated by 2414166 (滕鑫); original author retained.
+static void page_init(void){
+//lab2 function1 2411061
+    // detect physical memory space from the device tree
+    uint64_t memory_base = get_memory_base();
+    uint64_t memory_size = get_memory_size();
+    if (memory_base == 0 || memory_size == 0) {
+        panic("No physical memory detected by DTB.");
+    }
+
+    // kernel image is mapped at VA=KERNBASE and PA=0x80200000,
+    // so the virtual-physical offset is their difference
+    va_pa_offset = PHYSICAL_MEMORY_OFFSET;
+
+    // npage is the upper bound of the manageable physical page numbers,
+    // i.e. the physical pages in [nbase, npage) are manageable
+    npage = (memory_base + memory_size) / PGSIZE;
+
+    // place the Page descriptor array right after the kernel image,
+    // aligned up to a page boundary (end is a virtual address)
+    extern char end[];
+    pages = (struct Page *)ROUNDUP((void *)end, PGSIZE);
+
+    // initially mark every manageable page descriptor as reserved
+    for (size_t i = 0; i < npage - nbase; i++) {
+        SetPageReserved(pages + i);
+    }
+
+    // free memory starts right after the descriptor array, aligned up
+    uintptr_t freemem = PADDR((uintptr_t)pages + (npage - nbase) * sizeof(struct Page));
+    freemem = ROUNDUP(freemem, PGSIZE);
+
+    // free memory ends at the physical memory end, aligned down
+    uintptr_t mem_end = ROUNDDOWN(memory_base + memory_size, PGSIZE);
+
+    // hand the complete free pages to the pmm_manager if there are any
+    if (freemem < mem_end) {
+        init_memmap(pa2page(freemem), (mem_end - freemem) / PGSIZE);
+    }
+
+    cprintf("physical memory map:\n");
+    cprintf("  memory: 0x%016lx, [0x%016lx, 0x%016lx].\n", memory_size, memory_base, memory_base + memory_size);
+}
 
 // boot_map_segment - setup&enable the paging mechanism
 // parameters
@@ -172,6 +216,8 @@ void pmm_init(void)
 // return vaule: the kernel virtual address of this pte
 pte_t *get_pte(pde_t *pgdir, uintptr_t la, bool create)
 {
+    //LAB4 function1 2414166: roll back partial page-table allocation.
+    struct Page *new_table = NULL;
     pde_t *pdep1 = &pgdir[PDX1(la)];
     if (!(*pdep1 & PTE_V))
     {
@@ -184,14 +230,21 @@ pte_t *get_pte(pde_t *pgdir, uintptr_t la, bool create)
         uintptr_t pa = page2pa(page);
         memset(KADDR(pa), 0, PGSIZE);
         *pdep1 = pte_create(page2ppn(page), PTE_U | PTE_V);
+        new_table = page;
     }
-
-    pde_t *pdep0 = &((pde_t *)KADDR(PDE_ADDR(*pdep1)))[PDX0(la)];
+    pde_t *pdep0 = &((pte_t *)KADDR(PDE_ADDR(*pdep1)))[PDX0(la)];
     if (!(*pdep0 & PTE_V))
     {
         struct Page *page;
         if (!create || (page = alloc_page()) == NULL)
         {
+            if (new_table != NULL)
+            {
+                *pdep1 = 0;
+                flush_tlb();
+                set_page_ref(new_table, 0);
+                free_page(new_table);
+            }
             return NULL;
         }
         set_page_ref(page, 1);
@@ -322,13 +375,63 @@ void exit_range(pde_t *pgdir, uintptr_t start, uintptr_t end)
 
 
 //lab4 请补充你在lab4中的代码
+//LAB4 function1 2414166 滕鑫
+// Remove a present mapping without allocating page-table pages.
+void page_remove(pde_t *pgdir, uintptr_t la)//撤销映射
+{
+    pte_t *ptep = get_pte(pgdir, la, 0);//create=0，只查找，不分配
+    if (ptep == NULL || !(*ptep & PTE_V))//页表路径不存在或者有页表项但没有有效映射时，直接返回
+    {
+        return;
+    }
+    struct Page *page = pte2page(*ptep);//保存旧物理页
+    *ptep = 0;//清除页表项
+    tlb_invalidate(pgdir, la);//同步TLB
+    if (page_ref_dec(page) == 0)//不能无条件释放，因为一个物理页可能被多个虚拟地址映射
+    {
+        free_page(page);
+    }
+}
+//pgdir:根据页表的内核虚拟地址，代码通过它访问页表
+//page:要被映射的物理页的管理记录
+//la:目标虚拟地址
+//perm:调用者要求的权限位
+//ptep:指向目标页表项的指针
+//*ptep:页表项中实际保存的值，记录映射和权限的信息
+
+int page_insert(pde_t *pgdir, struct Page *page, uintptr_t la, uint32_t perm)
+{
+    pte_t *ptep = get_pte(pgdir, la, 1);//create=1，缺少中间页表时，可以分配，返回的是页表项的位置，不是目标物理页
+    if (ptep == NULL)
+    {
+        return -E_NO_MEM;//分配失败
+    }
+
+    // Hold the new reference before removing the old one. In particular,
+    // remapping the same page must never return that page to the allocator.
+    page_ref_inc(page);//增加目标页引用
+    if (*ptep & PTE_V)//判断原映射
+    {
+        if (pte2page(*ptep) == page)//原地址没有有效映射，page.ref增加1;//原地址映射到同一物理页，权限由R->R/W
+        {
+            page_ref_dec(page);
+        }
+        else
+        {
+            page_remove(pgdir, la);//原地址映射到另一位物理页，撤销旧页的映射引用，然后建立新映射
+        }
+    }
+    *ptep = pte_create(page2ppn(page), perm);//将目标物理页号和权限写入页表项
+    tlb_invalidate(pgdir, la);//同步该地址的TLB状态
+    return 0;//返回成功
+}
 
 
 // invalidate a TLB entry, but only if the page tables being
 // edited are the ones currently in use by the processor.
 void tlb_invalidate(pde_t *pgdir, uintptr_t la)
 {
-    asm volatile("sfence.vma %0" : : "r"(la));
+    asm volatile("sfence.vma %0, zero" : : "r"(la) : "memory");
 }
 
 // pgdir_alloc_page - call alloc_page & page_insert functions to
@@ -520,4 +623,25 @@ static int get_pgtable_items(size_t left, size_t right, size_t start,
         return perm;
     }
     return 0;
+}
+
+//lab5 function1 2414166: display only the current user mappings.
+void print_pgdir(void)
+{
+    if (current == NULL || current->mm == NULL) {
+        return;
+    }
+    pde_t *pgdir = current->mm->pgdir;
+    cprintf("User page table (pid %d):\n", current->pid);
+    for (uintptr_t va = USERBASE; va < USERTOP;) {
+        pte_t *pte = get_pte(pgdir, va, 0);
+        if (pte == NULL) {
+            va = ROUNDUP(va + 1, PTSIZE);
+            continue;
+        }
+        if ((*pte & (PTE_V | PTE_U)) == (PTE_V | PTE_U)) {
+            cprintf("  %p %s\n", (void *)va, perm2str(*pte));
+        }
+        va += PGSIZE;
+    }
 }
