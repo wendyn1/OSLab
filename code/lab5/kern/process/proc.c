@@ -84,7 +84,20 @@ void switch_to(struct context *from, struct context *to);
 
 //lab4 请补充你在lab4中的代码
 
-//lab5 function2 YOUR CODE update alloc_proc
+static struct proc_struct *
+alloc_proc(void)
+{
+    struct proc_struct *proc = kmalloc(sizeof(*proc));
+    if (proc != NULL) {
+        memset(proc, 0, sizeof(*proc));
+        proc->state = PROC_UNINIT;
+        proc->pid = -1;
+        proc->pgdir = boot_pgdir_pa;
+        list_init(&proc->list_link);
+        list_init(&proc->hash_link);
+    }
+    return proc;
+}
 
 
 // set_proc_name - set the name of proc
@@ -228,7 +241,16 @@ find_proc(int pid)
     return NULL;
 }
 
-//lab5 function2 YOUR CODE update kernel_thread
+int kernel_thread(int (*fn)(void *), void *arg, uint32_t clone_flags)
+{
+    struct trapframe tf;
+    memset(&tf, 0, sizeof(tf));
+    tf.gpr.s0 = (uintptr_t)fn;
+    tf.gpr.s1 = (uintptr_t)arg;
+    tf.status = (read_csr(sstatus) | SSTATUS_SPP | SSTATUS_SPIE) & ~SSTATUS_SIE;
+    tf.epc = (uintptr_t)kernel_thread_entry;
+    return do_fork(clone_flags | CLONE_VM, 0, &tf);
+}
 
 
 // setup_kstack - alloc pages with size KSTACKPAGE as process kernel stack
@@ -278,13 +300,195 @@ put_pgdir(struct mm_struct *mm)
 
 
 
-//lab5 function2 YOUR CODE
+static int load_icode(unsigned char *binary, size_t size)
+{
+    if (binary == NULL || size < sizeof(struct elfhdr)) return -E_INVAL_ELF;
+    struct elfhdr *elf = (struct elfhdr *)binary;
+    if (elf->e_magic != ELF_MAGIC || elf->e_phentsize != sizeof(struct proghdr) ||
+        elf->e_phoff > size || elf->e_phnum > (size - elf->e_phoff) / sizeof(struct proghdr)) {
+        return -E_INVAL_ELF;
+    }
+    struct mm_struct *mm = mm_create();
+    if (mm == NULL) return -E_NO_MEM;
+    int ret = setup_pgdir(mm);
+    if (ret != 0) goto fail_mm;
+    for (size_t i = 0; i < elf->e_phnum; i++) {
+        struct proghdr *ph = (struct proghdr *)(binary + elf->e_phoff + i * sizeof(*ph));
+        if (ph->p_type != ELF_PT_LOAD) continue;
+        if (ph->p_filesz > ph->p_memsz || ph->p_offset > size ||
+            ph->p_filesz > size - ph->p_offset || ph->p_memsz == 0 ||
+            ph->p_va + ph->p_memsz < ph->p_va ||
+            !USER_ACCESS(ph->p_va, ph->p_va + ph->p_memsz)) {
+            ret = -E_INVAL_ELF;
+            goto fail_pgdir;
+        }
+        uint32_t vm_flags = 0, perm = PTE_U | PTE_R;
+        if (ph->p_flags & ELF_PF_R) vm_flags |= VM_READ;
+        if (ph->p_flags & ELF_PF_W) { vm_flags |= VM_WRITE; perm |= PTE_W; }
+        if (ph->p_flags & ELF_PF_X) { vm_flags |= VM_EXEC; perm |= PTE_X; }
+        ret = mm_map(mm, ph->p_va, ph->p_memsz, vm_flags, NULL);
+        if (ret != 0) goto fail_pgdir;
+        for (uintptr_t la = ROUNDDOWN(ph->p_va, PGSIZE);
+             la < ROUNDUP(ph->p_va + ph->p_memsz, PGSIZE); la += PGSIZE) {
+            struct Page *page = pgdir_alloc_page(mm->pgdir, la, perm | PTE_W);
+            if (page == NULL) { ret = -E_NO_MEM; goto fail_pgdir; }
+            memset(page2kva(page), 0, PGSIZE);
+            uintptr_t file_start = ph->p_va, file_end = ph->p_va + ph->p_filesz;
+            uintptr_t from = la > file_start ? la : file_start;
+            uintptr_t to = la + PGSIZE < file_end ? la + PGSIZE : file_end;
+            if (from < to) memcpy((char *)page2kva(page) + from - la,
+                                  binary + ph->p_offset + from - ph->p_va, to - from);
+            pte_t *ptep = get_pte(mm->pgdir, la, 0);
+            if (ptep != NULL) *ptep = (*ptep & ~PTE_W) | (perm & PTE_W);
+        }
+    }
+    ret = mm_map(mm, USTACKTOP - USTACKSIZE, USTACKSIZE,
+                 VM_READ | VM_WRITE | VM_STACK, NULL);
+    if (ret != 0) goto fail_pgdir;
+    for (uintptr_t la = USTACKTOP - 4 * PGSIZE; la < USTACKTOP; la += PGSIZE) {
+        if (pgdir_alloc_page(mm->pgdir, la, PTE_U | PTE_R | PTE_W) == NULL) {
+            ret = -E_NO_MEM;
+            goto fail_pgdir;
+        }
+    }
+    mm_count_inc(mm);
+    current->mm = mm;
+    current->pgdir = PADDR(mm->pgdir);
+    uintptr_t satp_value = ((uintptr_t)SATP_MODE_SV39 << 60) |
+                           (current->pgdir >> RISCV_PGSHIFT);
+    asm volatile("csrw satp, %0" :: "r"(satp_value) : "memory");
+    flush_tlb();
+    struct trapframe *tf = current->tf;
+    memset(tf, 0, sizeof(*tf));
+    tf->gpr.sp = USTACKTOP;
+    tf->epc = elf->e_entry;
+    tf->status = (read_csr(sstatus) | SSTATUS_SPIE) & ~(SSTATUS_SPP | SSTATUS_SIE);
+    return 0;
+fail_pgdir:
+    exit_mmap(mm);
+    put_pgdir(mm);
+fail_mm:
+    mm_destroy(mm);
+    return ret;
+}
 
 
 //lab5 function3 YOUR CODE
 
 
-//lab5 function4 YOUR CODE
+int do_yield(void)
+{
+    current->need_resched = 1;
+    return 0;
+}
+
+int do_kill(int pid)
+{
+    bool intr_flag;
+    local_intr_save(intr_flag);
+    struct proc_struct *proc = find_proc(pid);
+    if (proc == NULL || proc == idleproc || proc == initproc ||
+        proc->state == PROC_ZOMBIE || (proc->flags & PF_EXITING)) {
+        local_intr_restore(intr_flag);
+        return -E_INVAL;
+    }
+    proc->flags |= PF_EXITING;
+    if (proc->state == PROC_SLEEPING && (proc->wait_state & WT_INTERRUPTED)) {
+        wakeup_proc(proc);
+    }
+    local_intr_restore(intr_flag);
+    return 0;
+}
+
+int do_exit(int error_code)
+{
+    if (current == idleproc || current == initproc) {
+        panic("idle or init process cannot exit");
+    }
+    struct mm_struct *mm = current->mm;
+    if (mm != NULL) {
+        uintptr_t satp_value = ((uintptr_t)SATP_MODE_SV39 << 60) |
+                               (boot_pgdir_pa >> RISCV_PGSHIFT);
+        asm volatile("csrw satp, %0" :: "r"(satp_value) : "memory");
+        flush_tlb();
+        if (mm_count_dec(mm) == 0) {
+            exit_mmap(mm);
+            put_pgdir(mm);
+            mm_destroy(mm);
+        }
+        current->mm = NULL;
+        current->pgdir = boot_pgdir_pa;
+    }
+    bool intr_flag;
+    local_intr_save(intr_flag);
+    current->state = PROC_ZOMBIE;
+    current->exit_code = error_code;
+    if (current->parent != NULL && current->parent->wait_state == WT_CHILD) {
+        wakeup_proc(current->parent);
+    }
+    while (current->cptr != NULL) {
+        struct proc_struct *child = current->cptr;
+        current->cptr = child->optr;
+        if (current->cptr != NULL) current->cptr->yptr = NULL;
+        child->parent = initproc;
+        child->yptr = NULL;
+        child->optr = initproc->cptr;
+        if (child->optr != NULL) child->optr->yptr = child;
+        initproc->cptr = child;
+        if (child->state == PROC_ZOMBIE && initproc->wait_state == WT_CHILD) {
+            wakeup_proc(initproc);
+        }
+    }
+    local_intr_restore(intr_flag);
+    schedule();
+    panic("zombie process resumed");
+}
+
+int do_wait(int pid, int *code_store)
+{
+    if (pid < 0 || (code_store != NULL && current->mm != NULL &&
+        !user_mem_check(current->mm, (uintptr_t)code_store, sizeof(int), 1))) {
+        return -E_INVAL;
+    }
+repeat:
+    bool intr_flag;
+    bool has_child = 0;
+    struct proc_struct *proc = NULL;
+    local_intr_save(intr_flag);
+    if (pid != 0) {
+        proc = find_proc(pid);
+        if (proc == NULL || proc->parent != current) {
+            local_intr_restore(intr_flag);
+            return -E_BAD_PROC;
+        }
+        has_child = 1;
+    } else {
+        for (proc = current->cptr; proc != NULL; proc = proc->optr) {
+            has_child = 1;
+            if (proc->state == PROC_ZOMBIE) break;
+        }
+    }
+    if (!has_child) {
+        local_intr_restore(intr_flag);
+        return -E_BAD_PROC;
+    }
+    if (proc != NULL && proc->state == PROC_ZOMBIE) {
+        int exit_code = proc->exit_code;
+        unhash_proc(proc);
+        remove_links(proc);
+        local_intr_restore(intr_flag);
+        if (code_store != NULL) *code_store = exit_code;
+        put_kstack(proc);
+        kfree(proc);
+        return 0;
+    }
+    current->state = PROC_SLEEPING;
+    current->wait_state = WT_CHILD;
+    local_intr_restore(intr_flag);
+    schedule();
+    if (current->flags & PF_EXITING) return -E_KILLED;
+    goto repeat;
+}
 
 
 #define __KERNEL_EXECVE(name, binary, size) ({           \
@@ -308,7 +512,103 @@ put_pgdir(struct mm_struct *mm)
 #define KERNEL_EXECVE2(x, xstart, xsize) __KERNEL_EXECVE2(x, xstart, xsize)
 
 
-//lab5 function2 YOUR CODE
+int do_execve(const char *name, size_t len, unsigned char *binary, size_t size)
+{
+    if (name == NULL || binary == NULL || size == 0) return -E_INVAL;
+    char local_name[PROC_NAME_LEN + 1];
+    memset(local_name, 0, sizeof(local_name));
+    size_t n = len < PROC_NAME_LEN ? len : PROC_NAME_LEN;
+    if (current->mm != NULL && !copy_from_user(current->mm, local_name, name, n, 0))
+        return -E_INVAL;
+    if (current->mm == NULL) memcpy(local_name, name, n);
+    unsigned char *image = binary;
+    if (current->mm != NULL) {
+        image = kmalloc(size);
+        if (image == NULL) return -E_NO_MEM;
+        if (!copy_from_user(current->mm, image, binary, size, 0)) {
+            kfree(image);
+            return -E_INVAL;
+        }
+        struct mm_struct *old = current->mm;
+        uintptr_t satp_value = ((uintptr_t)SATP_MODE_SV39 << 60) |
+                               (boot_pgdir_pa >> RISCV_PGSHIFT);
+        asm volatile("csrw satp, %0" :: "r"(satp_value) : "memory");
+        flush_tlb();
+        current->mm = NULL;
+        current->pgdir = boot_pgdir_pa;
+        if (mm_count_dec(old) == 0) {
+            exit_mmap(old);
+            put_pgdir(old);
+            mm_destroy(old);
+        }
+    }
+    int ret = load_icode(image, size);
+    if (image != binary) kfree(image);
+    if (ret == 0) set_proc_name(current, local_name);
+    return ret;
+}
+
+int kernel_execve(const char *name, unsigned char *binary, size_t size)
+{
+    int ret = do_execve(name, strlen(name), binary, size);
+    if (ret == 0) forkrets(current->tf);
+    return ret;
+}
+
+static int user_main(void *arg)
+{
+    int ret = KERNEL_EXECVE(hello);
+    panic("user_main: exec failed: %d", ret);
+}
+
+static int init_main(void *arg)
+{
+    int pid = kernel_thread(user_main, NULL, 0);
+    if (pid <= 0) panic("cannot create user process: %d", pid);
+    while (do_wait(0, NULL) == 0) { }
+    cprintf("all user processes have exited.\n");
+    return 0;
+}
+
+void proc_init(void)
+{
+    list_init(&proc_list);
+    for (int i = 0; i < HASH_LIST_SIZE; i++) list_init(&hash_list[i]);
+    if ((idleproc = alloc_proc()) == NULL) panic("cannot allocate idle process");
+    idleproc->pid = 0;
+    idleproc->state = PROC_RUNNABLE;
+    idleproc->kstack = (uintptr_t)bootstack;
+    idleproc->need_resched = 1;
+    set_proc_name(idleproc, "idle");
+    current = idleproc;
+    nr_process = 1;
+    int pid = kernel_thread(init_main, NULL, 0);
+    if (pid <= 0 || (initproc = find_proc(pid)) == NULL)
+        panic("cannot create init process");
+    set_proc_name(initproc, "init");
+}
+
+void cpu_idle(void)
+{
+    while (1) {
+        if (current->need_resched) schedule();
+    }
+}
+
+void proc_run(struct proc_struct *proc)
+{
+    if (proc == current) return;
+    bool intr_flag;
+    local_intr_save(intr_flag);
+    struct proc_struct *prev = current;
+    current = proc;
+    uintptr_t satp_value = ((uintptr_t)SATP_MODE_SV39 << 60) |
+                           (proc->pgdir >> RISCV_PGSHIFT);
+    asm volatile("csrw satp, %0" :: "r"(satp_value) : "memory");
+    flush_tlb();
+    switch_to(&prev->context, &proc->context);
+    local_intr_restore(intr_flag);
+}
 
 
 
