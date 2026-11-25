@@ -24,3 +24,23 @@ void wakeup_proc(struct proc_struct *proc)
 }
 
 //lab4 请补充你在lab4中的代码
+// 2411061：占位区外必要依赖迁移，缺少本函数会导致 LAB5 链接失败。
+void schedule(void)
+{
+    bool intr_flag;
+    local_intr_save(intr_flag);
+    current->need_resched = 0;
+    list_entry_t *start = current == idleproc ? &proc_list : &current->list_link;
+    list_entry_t *le = start;
+    struct proc_struct *next = idleproc;
+    do {
+        le = list_next(le);
+        if (le != &proc_list) {
+            struct proc_struct *candidate = le2proc(le, list_link);
+            if (candidate->state == PROC_RUNNABLE) { next = candidate; break; }
+        }
+    } while (le != start);
+    next->runs++;
+    if (next != current) proc_run(next);
+    local_intr_restore(intr_flag);
+}

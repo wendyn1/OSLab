@@ -77,6 +77,40 @@ static slob_t arena = {.next = &arena, .units = 1};
 static slob_t *slobfree = &arena;
 static bigblock_t *bigblocks;
 
+// 2411061：占位区外必要回收补充，避免压力测试结束后把堆缓存页误判为用户页泄漏。
+void kmalloc_trim(void)
+{
+    unsigned long flags;
+    spin_lock_irqsave(&slob_lock, flags);
+restart:
+    ;
+    slob_t *prev = slobfree, *block = prev->next;
+    do {
+        if (block != &arena) {
+            uintptr_t begin = ROUNDUP((uintptr_t)block, PAGE_SIZE);
+            uintptr_t end = (uintptr_t)(block + block->units);
+            if (begin + PAGE_SIZE <= end) {
+                slob_t *next = block->next;
+                size_t tail = (end - begin - PAGE_SIZE) / SLOB_UNIT;
+                slob_t *suffix = (slob_t *)(begin + PAGE_SIZE);
+                if (tail != 0) { suffix->units = tail; suffix->next = next; next = suffix; }
+                if (begin == (uintptr_t)block) {
+                    prev->next = next;
+                    if (slobfree == block) slobfree = prev;
+                } else {
+                    block->units = (begin - (uintptr_t)block) / SLOB_UNIT;
+                    block->next = next;
+                }
+                free_page(kva2page((void *)begin));
+                goto restart; // 原节点可能已归还，必须从有效链表重新定位。
+            }
+        }
+        prev = block;
+        block = block->next;
+    } while (prev != slobfree);
+    spin_unlock_irqrestore(&slob_lock, flags);
+}
+
 static void *__slob_get_free_pages(gfp_t gfp, int order)
 {
 	struct Page *page = alloc_pages(1 << order);
@@ -89,7 +123,8 @@ static void *__slob_get_free_pages(gfp_t gfp, int order)
 
 static inline void __slob_free_pages(unsigned long kva, int order)
 {
-	free_pages(kva2page(kva), 1 << order);
+	// 2411061：kva 存储内核虚拟地址，显式转换为 kva2page 所需的指针类型。
+	free_pages(kva2page((void *)kva), 1 << order);
 }
 
 static void slob_free(void *b, int size);

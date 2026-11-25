@@ -309,69 +309,57 @@ void unmap_range(pde_t *pgdir, uintptr_t start, uintptr_t end)
     } while (start != 0 && start < end);
 }
 
+// 2411061：占位区外必要清理修复；只有整张目录为空时才回收，不能只检查当前 VMA。
 void exit_range(pde_t *pgdir, uintptr_t start, uintptr_t end)
 {
     assert(start % PGSIZE == 0 && end % PGSIZE == 0);
     assert(USER_ACCESS(start, end));
-
-    uintptr_t d1start, d0start;
-    int free_pt, free_pd0;
-    pde_t *pd0, *pt, pde1, pde0;
-    d1start = ROUNDDOWN(start, PDSIZE);
-    d0start = ROUNDDOWN(start, PTSIZE);
-    do
-    {
-        // level 1 page directory entry
-        pde1 = pgdir[PDX1(d1start)];
-        // if there is a valid entry, get into level 0
-        // and try to free all page tables pointed to by
-        // all valid entries in level 0 page directory,
-        // then try to free this level 0 page directory
-        // and update level 1 entry
-        if (pde1 & PTE_V)
-        {
-            pd0 = page2kva(pde2page(pde1));
-            // try to free all page tables
-            free_pd0 = 1;
-            do
-            {
-                pde0 = pd0[PDX0(d0start)];
-                if (pde0 & PTE_V)
-                {
-                    pt = page2kva(pde2page(pde0));
-                    // try to free page table
-                    free_pt = 1;
-                    for (int i = 0; i < NPTEENTRY; i++)
-                        if (pt[i] & PTE_V)
-                        {
-                            free_pt = 0;
-                            break;
-                        }
-                    // free it only when all entry are already invalid
-                    if (free_pt)
-                    {
-                        free_page(pde2page(pde0));
-                        pd0[PDX0(d0start)] = 0;
-                    }
-                }
-                else
-                    free_pd0 = 0;
-                d0start += PTSIZE;
-            } while (d0start != 0 && d0start < d1start + PDSIZE && d0start < end);
-            // free level 0 page directory only when all pde0s in it are already invalid
-            if (free_pd0)
-            {
-                free_page(pde2page(pde1));
-                pgdir[PDX1(d1start)] = 0;
+    for (uintptr_t va = ROUNDDOWN(start, PTSIZE); va < end; va += PTSIZE) {
+        pde_t *root = &pgdir[PDX1(va)];
+        if (!(*root & PTE_V)) continue;
+        pde_t *middle = page2kva(pde2page(*root));
+        pde_t *entry = &middle[PDX0(va)];
+        if (*entry & PTE_V) {
+            pte_t *table = page2kva(pde2page(*entry));
+            bool empty = 1;
+            for (int i = 0; i < NPTEENTRY; i++) {
+                if (table[i] & PTE_V) { empty = 0; break; }
             }
+            if (empty) { free_page(pde2page(*entry)); *entry = 0; }
         }
-        d1start += PDSIZE;
-        d0start = d1start;
-    } while (d1start != 0 && d1start < end);
+        bool empty = 1;
+        for (int i = 0; i < NPDEENTRY; i++) {
+            if (middle[i] & PTE_V) { empty = 0; break; }
+        }
+        if (empty) { free_page(pde2page(*root)); *root = 0; }
+    }
+    flush_tlb();
 }
 
-
-//lab5 function3 YOUR CODE 
+//lab5 function3 2411061
+int copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end, bool share)
+{
+    assert(to != from && start % PGSIZE == 0 && end % PGSIZE == 0);
+    assert(USER_ACCESS(start, end));
+    for (uintptr_t va = start; va < end; va += PGSIZE) {
+        pte_t *src = get_pte(from, va, 0);
+        if (src == NULL || !(*src & PTE_V)) continue; // 空洞不额外分配数据页。
+        uint32_t perm = *src & (PTE_USER | PTE_A | PTE_D);
+        struct Page *old = pte2page(*src);
+        struct Page *page = old;
+        if (!share) {
+            page = alloc_page();
+            if (page == NULL) return -E_NO_MEM;
+            memcpy(page2kva(page), page2kva(old), PGSIZE);
+        }
+        int ret = page_insert(to, page, va, perm);
+        if (ret != 0) {
+            if (!share) free_page(page); // 尚未映射的新页由本函数负责归还。
+            return ret; // 已建立映射由 copy_mm 的失败路径统一销毁。
+        }
+    }
+    return 0;
+}
 
 
 //lab4 请补充你在lab4中的代码

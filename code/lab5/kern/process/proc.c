@@ -296,7 +296,36 @@ put_pgdir(struct mm_struct *mm)
     free_page(kva2page(mm->pgdir));
 }
 
-//lab5 function3 YOUR CODE update copy_mm
+//lab5 function3 2411061 update copy_mm
+static int copy_mm(uint32_t clone_flags, struct proc_struct *proc)
+{
+    struct mm_struct *old = current->mm;
+    if (old == NULL) return 0; // 内核线程继续共用内核页表。
+    struct mm_struct *mm = old;
+    int ret = 0;
+    if (!(clone_flags & CLONE_VM)) {
+        mm = mm_create();
+        if (mm == NULL) return -E_NO_MEM;
+        if ((ret = setup_pgdir(mm)) != 0) {
+            mm_destroy(mm);
+            return ret;
+        }
+        lock_mm(old);
+        ret = dup_mmap(mm, old);
+        unlock_mm(old);
+        if (ret != 0) {
+            // 子地址空间尚未发布，按映射、根表、描述结构逆序清理。
+            exit_mmap(mm);
+            put_pgdir(mm);
+            mm_destroy(mm);
+            return ret;
+        }
+    }
+    mm_count_inc(mm);
+    proc->mm = mm;
+    proc->pgdir = PADDR(mm->pgdir);
+    return 0;
+}
 
 
 
@@ -346,10 +375,13 @@ static int load_icode(unsigned char *binary, size_t size)
                  VM_READ | VM_WRITE | VM_STACK, NULL);
     if (ret != 0) goto fail_pgdir;
     for (uintptr_t la = USTACKTOP - 4 * PGSIZE; la < USTACKTOP; la += PGSIZE) {
-        if (pgdir_alloc_page(mm->pgdir, la, PTE_U | PTE_R | PTE_W) == NULL) {
+        struct Page *page = pgdir_alloc_page(mm->pgdir, la, PTE_U | PTE_R | PTE_W);
+        if (page == NULL) {
             ret = -E_NO_MEM;
             goto fail_pgdir;
         }
+        // 2411061：占位区外装载修复，不能把上一个使用者的物理页内容暴露为用户栈。
+        memset(page2kva(page), 0, PGSIZE);
     }
     mm_count_inc(mm);
     current->mm = mm;
@@ -373,7 +405,42 @@ fail_mm:
 }
 
 
-//lab5 function3 YOUR CODE
+//lab5 function3 2411061
+static void copy_thread(struct proc_struct *proc, uintptr_t stack,
+                        struct trapframe *tf)
+{
+    proc->tf = (struct trapframe *)(proc->kstack + KSTACKSIZE - sizeof(*tf));
+    *proc->tf = *tf;
+    proc->tf->gpr.a0 = 0; // 子进程从相同用户返回位置获得 fork 返回值零。
+    proc->tf->gpr.sp = stack ? stack : (uintptr_t)proc->tf;
+    proc->context.ra = (uintptr_t)forkret;
+    proc->context.sp = (uintptr_t)proc->tf;
+}
+
+int do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf)
+{
+    if (nr_process >= MAX_PROCESS) return -E_NO_FREE_PROC;
+    struct proc_struct *proc = alloc_proc();
+    if (proc == NULL) return -E_NO_MEM;
+    int ret = setup_kstack(proc);
+    if (ret != 0) goto fail_proc;
+    if ((ret = copy_mm(clone_flags, proc)) != 0) goto fail_stack;
+    copy_thread(proc, stack, tf);
+    proc->parent = current;
+    bool intr_flag;
+    local_intr_save(intr_flag);
+    proc->pid = get_pid();
+    hash_proc(proc);
+    set_links(proc); // 同时维护进程列表、兄弟关系和全局数量。
+    wakeup_proc(proc);
+    local_intr_restore(intr_flag);
+    return proc->pid;
+fail_stack:
+    put_kstack(proc);
+fail_proc:
+    kfree(proc);
+    return ret;
+}
 
 
 int do_yield(void)
@@ -446,11 +513,13 @@ int do_exit(int error_code)
 
 int do_wait(int pid, int *code_store)
 {
-    if (pid < 0 || (code_store != NULL && current->mm != NULL &&
-        !user_mem_check(current->mm, (uintptr_t)code_store, sizeof(int), 1))) {
+    // 2411061：占位区外集成修复，负 PID 没有匹配子进程，与课程接口约定一致。
+    if (pid < 0) return -E_BAD_PROC;
+    if (code_store != NULL && current->mm != NULL &&
+        !user_mem_check(current->mm, (uintptr_t)code_store, sizeof(int), 1)) {
         return -E_INVAL;
     }
-repeat:
+repeat: ; // 2411061：C99 标签必须修饰语句，不能直接接变量声明。
     bool intr_flag;
     bool has_child = 0;
     struct proc_struct *proc = NULL;
@@ -477,7 +546,13 @@ repeat:
         unhash_proc(proc);
         remove_links(proc);
         local_intr_restore(intr_flag);
-        if (code_store != NULL) *code_store = exit_code;
+        // 2411061：占位区外修复，内核回写也必须经过 A 的 COW 分裂检查。
+        if (code_store != NULL && !copy_to_user(current->mm, code_store,
+                                               &exit_code, sizeof(exit_code))) {
+            put_kstack(proc);
+            kfree(proc);
+            return -E_INVAL;
+        }
         put_kstack(proc);
         kfree(proc);
         return 0;
@@ -515,6 +590,7 @@ repeat:
 int do_execve(const char *name, size_t len, unsigned char *binary, size_t size)
 {
     if (name == NULL || binary == NULL || size == 0) return -E_INVAL;
+    bool had_user_mm = current->mm != NULL;
     char local_name[PROC_NAME_LEN + 1];
     memset(local_name, 0, sizeof(local_name));
     size_t n = len < PROC_NAME_LEN ? len : PROC_NAME_LEN;
@@ -545,6 +621,8 @@ int do_execve(const char *name, size_t len, unsigned char *binary, size_t size)
     int ret = load_icode(image, size);
     if (image != binary) kfree(image);
     if (ret == 0) set_proc_name(current, local_name);
+    // 2411061：旧用户映像已销毁时装载失败必须退出，不能恢复到已释放的用户 PC。
+    if (ret != 0 && had_user_mm) do_exit(ret);
     return ret;
 }
 
@@ -557,17 +635,30 @@ int kernel_execve(const char *name, unsigned char *binary, size_t size)
 
 static int user_main(void *arg)
 {
+#ifdef TEST
+    // 2411061：占位区外接通框架 build-*/make grade 的程序选择，默认仍运行 hello。
+    int ret = KERNEL_EXECVE2(TEST, TESTSTART, TESTSIZE);
+#else
     int ret = KERNEL_EXECVE(hello);
+#endif
     panic("user_main: exec failed: %d", ret);
 }
 
 static int init_main(void *arg)
 {
+    kmalloc_trim(); // 2411061：在相同的“堆空闲页已归还”条件下比较资源基线。
+    size_t free_before = nr_free_pages(); // 2411061：记录启动子进程前的真实资源基线。
+    int count_before = nr_process;
     int pid = kernel_thread(user_main, NULL, 0);
     if (pid <= 0) panic("cannot create user process: %d", pid);
     while (do_wait(0, NULL) == 0) { }
-    cprintf("all user processes have exited.\n");
-    return 0;
+    // 2411061：占位区外收尾修复，init 不退出；先核对回收，再进入调试监控器。
+    assert(current->cptr == NULL && nr_process == count_before);
+    kmalloc_trim();
+    assert(nr_free_pages() == free_before);
+    cprintf("all user-mode processes have quit.\n");
+    cprintf("init check memory pass.\n");
+    panic("init: all user processes have exited");
 }
 
 void proc_init(void)

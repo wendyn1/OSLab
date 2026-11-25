@@ -260,7 +260,8 @@ best_fit_check(void) {
 
 
 const struct pmm_manager default_pmm_manager = {
-    .name = "best_fit_pmm_manager",
+    // 2411061：与框架导出的管理器接口名一致，保留实际 Best-Fit 策略说明。
+    .name = "default_pmm_manager (Best-Fit)",
     .init = best_fit_init,
     .init_memmap = best_fit_init_memmap,
     .alloc_pages = best_fit_alloc_pages,
